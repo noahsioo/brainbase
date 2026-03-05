@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memory Unlimited - Brain Dashboard</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a0f;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+}
+
+#canvas3d { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; }
+
+#ui {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+#header {
+  pointer-events: auto;
+  padding: 20px 28px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #fff;
+}
+
+#header h1 span { color: #7c5cfc; }
+
+#stats-bar {
+  pointer-events: auto;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  padding: 18px 28px;
+  display: flex;
+  gap: 36px;
+  align-items: flex-end;
+  background: rgba(10,10,15,0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(124,92,252,0.1);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: #555;
+}
+
+#live-indicator {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #4ade80;
+  letter-spacing: 0.5px;
+}
+
+#live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ade80;
+  animation: livePulse 2s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px #4ade80; }
+  50% { opacity: 0.4; box-shadow: 0 0 1px #4ade80; }
+}
+
+#tooltip {
+  display: none;
+  position: fixed;
+  pointer-events: none;
+  background: rgba(16,14,24,0.92);
+  border: 1px solid rgba(124,92,252,0.3);
+  border-radius: 10px;
+  padding: 14px 18px;
+  max-width: 340px;
+  font-size: 13px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 100;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+#tooltip .tt-type {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+#tooltip .tt-content {
+  color: #fff;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+#tooltip .tt-meta {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #666;
+}
+
+#legend {
+  pointer-events: auto;
+  position: fixed;
+  top: 20px;
+  right: 28px;
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  flex-wrap: wrap;
+  max-width: 500px;
+  justify-content: flex-end;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+  user-select: none;
+}
+
+.legend-item:hover { opacity: 1; }
+.legend-item.hidden { opacity: 0.2; }
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+#search-box {
+  pointer-events: auto;
+  position: fixed;
+  top: 60px;
+  left: 28px;
+}
+
+#search-box input {
+  background: rgba(20,18,30,0.75);
+  border: 1px solid rgba(124,92,252,0.2);
+  border-radius: 8px;
+  padding: 8px 14px;
+  color: #fff;
+  font-size: 13px;
+  width: 240px;
+  outline: none;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: border-color 0.2s;
+}
+
+#search-box input:focus { border-color: rgba(124,92,252,0.5); }
+#search-box input::placeholder { color: #555; }
+</style>
+</head>
+<body>
+<canvas id="canvas3d"></canvas>
+
+<div id="ui">
+  <div id="header">
+    <h1><span>&#9679;</span> Memory Unlimited</h1>
+  </div>
+
+  <div id="legend"></div>
+
+  <div id="search-box">
+    <input type="text" id="search" placeholder="Search nodes..." />
+  </div>
+
+  <div id="stats-bar">
+    <div class="stat"><span class="stat-value" id="s-nodes">0</span><span class="stat-label">Nodes</span></div>
+    <div class="stat"><span class="stat-value" id="s-edges">0</span><span class="stat-label">Edges</span></div>
+    <div class="stat"><span class="stat-value" id="s-sessions">0</span><span class="stat-label">Sessions</span></div>
+    <div class="stat"><span class="stat-value" id="s-active">0</span><span class="stat-label">Active</span></div>
+    <div class="stat"><span class="stat-value" id="s-types">0</span><span class="stat-label">Types</span></div>
+    <div id="live-indicator"><div id="live-dot"></div> Live</div>
+  </div>
+
+  <div id="tooltip">
+    <div class="tt-type"></div>
+    <div class="tt-content"></div>
+    <div class="tt-meta"></div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+const TYPE_COLORS = {
+  core:             0x5b8aff,
+  fact:             0x5b8aff,
+  identity:         0xfbbf24,
+  preference:       0x4ade80,
+  decision:         0xf87171,
+  frustration:      0xf87171,
+  project:          0xa78bfa,
+  system_knowledge: 0x9ca3af,
+  auto_topic:       0x9ca3af,
+  task:             0xf59e0b,
+  pattern:          0x6ee7b7,
+};
+
+function getColor(type) {
+  return TYPE_COLORS[type] || 0x9ca3af;
+}
+
+function getColorHex(type) {
+  return '#' + getColor(type).toString(16).padStart(6, '0');
+}
+
+// ---- Three.js Setup ----
+const canvas = document.getElementById('canvas3d');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x0a0a0f);
+renderer.toneMapping = THREE.ReinhardToneMapping;
+renderer.toneMappingExposure = 1.5;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x0a0a0f, 0.0015);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+camera.position.set(0, 0, 250);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.rotateSpeed = 0.6;
+controls.zoomSpeed = 1.2;
+controls.panSpeed = 0.8;
+controls.minDistance = 5;
+controls.maxDistance = 800;
+
+// ---- Post-Processing (Bloom) ----
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  1.2,
+  0.5,
+  0.3
+);
+composer.addPass(bloomPass);
+
+// ---- Resize ----
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+  bloomPass.resolution.set(window.innerWidth, window.innerHeight);
+});
+
+// ---- State ----
+let graphNodes = [];
+let graphEdges = [];
+let nodeMap = {};
+let simNodes = [];
+let nodeMeshes = [];
+let edgeLines = null;
+let searchQuery = '';
+let hiddenTypes = new Set();
+let selectedNode = null;
+let frameCount = 0;
+
+const nodeGroup = new THREE.Group();
+const edgeGroup = new THREE.Group();
+scene.add(edgeGroup);
+scene.add(nodeGroup);
+
+// ---- Ambient particles ----
+const particleCount = 300;
+const pGeo = new THREE.BufferGeometry();
+const pPositions = new Float32Array(particleCount * 3);
+for (let i = 0; i < particleCount; i++) {
+  pPositions[i * 3] = (Math.random() - 0.5) * 600;
+  pPositions[i * 3 + 1] = (Math.random() - 0.5) * 600;
+  pPositions[i * 3 + 2] = (Math.random() - 0.5) * 600;
+}
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+const pMat = new THREE.PointsMaterial({ color: 0x333355, size: 0.8, transparent: true, opacity: 0.4 });
+scene.add(new THREE.Points(pGeo, pMat));
+
+// ---- Node Creation ----
+function createNodeMesh(node, position) {
+  const importance = node.importance || 0.5;
+  const activation = node.activation || 0;
+  const radius = 1 + importance * 3;
+  const color = getColor(node.type);
+
+  const geo = new THREE.SphereGeometry(radius, 16, 12);
+  const mat = new THREE.MeshBasicMaterial({
+    color: color,
+    transparent: true,
+    opacity: 0.7 + importance * 0.3,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(position);
+  mesh.userData = {
+    node: node,
+    baseRadius: radius,
+    baseOpacity: 0.7 + importance * 0.3,
+    activation: activation,
+    pulseOffset: Math.random() * Math.PI * 2,
+    isNew: false,
+    flashTime: 0,
+  };
+  return mesh;
+}
+
+// ---- Edge Creation ----
+function rebuildEdges() {
+  while (edgeGroup.children.length > 0) {
+    const child = edgeGroup.children[0];
+    child.geometry.dispose();
+    child.material.dispose();
+    edgeGroup.remove(child);
+  }
+
+  const positions = [];
+  const colors = [];
+
+  for (const edge of graphEdges) {
+    const si = nodeMap[edge.source_id];
+    const ti = nodeMap[edge.target_id];
+    if (si === undefined || ti === undefined) continue;
+    const a = simNodes[si];
+    const b = simNodes[ti];
+    if (!a || !b) continue;
+    if (hiddenTypes.has(a.node.type) || hiddenTypes.has(b.node.type)) continue;
+
+    positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+
+    const cA = new THREE.Color(getColor(a.node.type));
+    const cB = new THREE.Color(getColor(b.node.type));
+    const alpha = 0.1 + edge.strength * 0.3;
+    colors.push(cA.r * alpha, cA.g * alpha, cA.b * alpha);
+    colors.push(cB.r * alpha, cB.g * alpha, cB.b * alpha);
+  }
+
+  if (positions.length === 0) return;
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+  const mat = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.6,
+    blending: THREE.AdditiveBlending,
+  });
+
+  edgeLines = new THREE.LineSegments(geo, mat);
+  edgeGroup.add(edgeLines);
+}
+
+// ---- 3D Force Simulation ----
+function initSimulation() {
+  simNodes = graphNodes.map((n, i) => {
+    const angle1 = (i / graphNodes.length) * Math.PI * 2;
+    const angle2 = (Math.random() - 0.5) * Math.PI;
+    const radius = 40 + Math.random() * 80;
+    return {
+      x: Math.cos(angle1) * Math.cos(angle2) * radius,
+      y: Math.sin(angle2) * radius,
+      z: Math.sin(angle1) * Math.cos(angle2) * radius,
+      vx: 0, vy: 0, vz: 0,
+      node: n,
+    };
+  });
+
+  while (nodeGroup.children.length > 0) {
+    const child = nodeGroup.children[0];
+    child.geometry.dispose();
+    child.material.dispose();
+    nodeGroup.remove(child);
+  }
+  nodeMeshes = [];
+
+  for (const sn of simNodes) {
+    const mesh = createNodeMesh(sn.node, new THREE.Vector3(sn.x, sn.y, sn.z));
+    nodeGroup.add(mesh);
+    nodeMeshes.push(mesh);
+  }
+
+  rebuildEdges();
+}
+
+function stepSimulation() {
+  const n = simNodes.length;
+  if (n === 0) return;
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = simNodes[i], b = simNodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+      let dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+      let force = 1200 / (dist * dist);
+      force = Math.min(force, 3);
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      const fz = (dz / dist) * force;
+      a.vx += fx; a.vy += fy; a.vz += fz;
+      b.vx -= fx; b.vy -= fy; b.vz -= fz;
+    }
+  }
+
+  for (const e of graphEdges) {
+    const si = nodeMap[e.source_id];
+    const ti = nodeMap[e.target_id];
+    if (si === undefined || ti === undefined) continue;
+    const a = simNodes[si], b = simNodes[ti];
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    const force = (dist - 30) * 0.004 * (e.strength || 0.5);
+    const fx = (dx / dist) * force;
+    const fy = (dy / dist) * force;
+    const fz = (dz / dist) * force;
+    a.vx += fx; a.vy += fy; a.vz += fz;
+    b.vx -= fx; b.vy -= fy; b.vz -= fz;
+  }
+
+  for (const sn of simNodes) {
+    sn.vx -= sn.x * 0.001;
+    sn.vy -= sn.y * 0.001;
+    sn.vz -= sn.z * 0.001;
+  }
+
+  for (const sn of simNodes) {
+    sn.vx *= 0.85;
+    sn.vy *= 0.85;
+    sn.vz *= 0.85;
+    sn.x += sn.vx;
+    sn.y += sn.vy;
+    sn.z += sn.vz;
+  }
+
+  for (let i = 0; i < simNodes.length; i++) {
+    const sn = simNodes[i];
+    const mesh = nodeMeshes[i];
+    if (!mesh) continue;
+    mesh.position.set(sn.x, sn.y, sn.z);
+  }
+
+  rebuildEdgePositions();
+}
+
+function rebuildEdgePositions() {
+  if (!edgeLines) return;
+  const positions = edgeLines.geometry.attributes.position;
+  if (!positions) return;
+
+  let idx = 0;
+  for (const edge of graphEdges) {
+    const si = nodeMap[edge.source_id];
+    const ti = nodeMap[edge.target_id];
+    if (si === undefined || ti === undefined) continue;
+    const a = simNodes[si];
+    const b = simNodes[ti];
+    if (!a || !b) continue;
+    if (hiddenTypes.has(a.node.type) || hiddenTypes.has(b.node.type)) continue;
+
+    positions.array[idx * 3] = a.x;
+    positions.array[idx * 3 + 1] = a.y;
+    positions.array[idx * 3 + 2] = a.z;
+    idx++;
+    positions.array[idx * 3] = b.x;
+    positions.array[idx * 3 + 1] = b.y;
+    positions.array[idx * 3 + 2] = b.z;
+    idx++;
+  }
+  positions.needsUpdate = true;
+}
+
+// ---- Node Pulse + Search ----
+function updateNodeVisuals(time) {
+  for (let i = 0; i < nodeMeshes.length; i++) {
+    const mesh = nodeMeshes[i];
+    const ud = mesh.userData;
+    const node = ud.node;
+
+    if (hiddenTypes.has(node.type)) {
+      mesh.visible = false;
+      continue;
+    }
+    mesh.visible = true;
+
+    const pulse = ud.activation > 0.05
+      ? 1 + Math.sin(time * 4 + ud.pulseOffset) * 0.1 * ud.activation
+      : 1;
+    const scale = ud.baseRadius * pulse;
+    mesh.scale.setScalar(pulse);
+
+    let opacity = ud.baseOpacity;
+    if (searchQuery) {
+      if (node.content.toLowerCase().includes(searchQuery.toLowerCase())) {
+        opacity = 1;
+        mesh.scale.setScalar(pulse * 1.4);
+      } else {
+        opacity = 0.08;
+        mesh.scale.setScalar(0.6);
+      }
+    }
+
+    if (selectedNode === i) {
+      opacity = 1;
+      mesh.scale.setScalar(pulse * 1.6);
+    }
+
+    if (ud.flashTime > 0) {
+      ud.flashTime -= 0.016;
+      const flash = Math.max(0, ud.flashTime / 0.5);
+      mesh.material.color.setHex(0xffffff);
+      mesh.material.color.lerp(new THREE.Color(getColor(node.type)), 1 - flash);
+      opacity = Math.max(opacity, flash);
+    }
+
+    mesh.material.opacity = opacity;
+  }
+}
+
+// ---- Raycaster / Interaction ----
+const raycaster = new THREE.Raycaster();
+raycaster.params.Points = { threshold: 2 };
+const mouse = new THREE.Vector2();
+let hoveredMeshIndex = -1;
+
+canvas.addEventListener('mousemove', (e) => {
+  mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(nodeMeshes);
+
+  const tooltip = document.getElementById('tooltip');
+
+  if (intersects.length > 0) {
+    const mesh = intersects[0].object;
+    const idx = nodeMeshes.indexOf(mesh);
+    hoveredMeshIndex = idx;
+    const node = mesh.userData.node;
+    canvas.style.cursor = 'pointer';
+
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 18) + 'px';
+    tooltip.style.top = (e.clientY - 12) + 'px';
+
+    if (e.clientX + 360 > window.innerWidth) {
+      tooltip.style.left = (e.clientX - 360) + 'px';
+    }
+
+    tooltip.querySelector('.tt-type').textContent = node.type;
+    tooltip.querySelector('.tt-type').style.color = getColorHex(node.type);
+    tooltip.querySelector('.tt-content').textContent = node.content;
+    const date = new Date(node.created_at).toLocaleDateString('de-DE');
+    tooltip.querySelector('.tt-meta').textContent =
+      `Importance: ${(node.importance * 100).toFixed(0)}% · Activation: ${(node.activation * 100).toFixed(0)}% · ${date}`;
+  } else {
+    hoveredMeshIndex = -1;
+    canvas.style.cursor = 'grab';
+    tooltip.style.display = 'none';
+  }
+});
+
+canvas.addEventListener('click', () => {
+  if (hoveredMeshIndex >= 0) {
+    selectedNode = selectedNode === hoveredMeshIndex ? null : hoveredMeshIndex;
+    highlightConnected();
+  } else {
+    selectedNode = null;
+    highlightConnected();
+  }
+});
+
+function highlightConnected() {
+  if (selectedNode === null) {
+    for (const mesh of nodeMeshes) {
+      mesh.material.color.setHex(getColor(mesh.userData.node.type));
+    }
+    rebuildEdges();
+    return;
+  }
+
+  const selId = graphNodes[selectedNode]?.id;
+  if (!selId) return;
+
+  const connectedIds = new Set([selId]);
+  for (const e of graphEdges) {
+    if (e.source_id === selId) connectedIds.add(e.target_id);
+    if (e.target_id === selId) connectedIds.add(e.source_id);
+  }
+
+  for (let i = 0; i < nodeMeshes.length; i++) {
+    const mesh = nodeMeshes[i];
+    const node = mesh.userData.node;
+    if (connectedIds.has(node.id)) {
+      mesh.material.color.setHex(getColor(node.type));
+    } else {
+      mesh.material.color.setHex(0x222233);
+    }
+  }
+}
+
+canvas.addEventListener('mouseleave', () => {
+  document.getElementById('tooltip').style.display = 'none';
+});
+
+document.getElementById('search').addEventListener('input', (e) => {
+  searchQuery = e.target.value;
+});
+
+// ---- Stats (animated count-up) ----
+function animateValue(el, target, duration) {
+  const start = parseInt(el.textContent) || 0;
+  if (start === target) return;
+  const startTime = performance.now();
+  function update(now) {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.round(start + (target - start) * eased);
+    if (progress < 1) requestAnimationFrame(update);
+  }
+  requestAnimationFrame(update);
+}
+
+function updateStats(stats) {
+  animateValue(document.getElementById('s-nodes'), stats.totalNodes, 1500);
+  animateValue(document.getElementById('s-edges'), stats.totalEdges, 1500);
+  animateValue(document.getElementById('s-sessions'), stats.totalSessions, 1500);
+  const activeCount = graphNodes.filter(n => n.activation > 0.05).length;
+  animateValue(document.getElementById('s-active'), activeCount, 1500);
+  const typeCount = new Set(graphNodes.map(n => n.type)).size;
+  animateValue(document.getElementById('s-types'), typeCount, 1500);
+}
+
+// ---- Legend ----
+function buildLegend() {
+  const types = [...new Set(graphNodes.map(n => n.type))].sort();
+  const legend = document.getElementById('legend');
+  legend.innerHTML = '';
+  for (const t of types) {
+    const el = document.createElement('div');
+    el.className = 'legend-item';
+    el.innerHTML = `<div class="legend-dot" style="background:${getColorHex(t)}"></div>${t}`;
+    el.addEventListener('click', () => {
+      if (hiddenTypes.has(t)) {
+        hiddenTypes.delete(t);
+        el.classList.remove('hidden');
+      } else {
+        hiddenTypes.add(t);
+        el.classList.add('hidden');
+      }
+      rebuildEdges();
+    });
+    legend.appendChild(el);
+  }
+}
+
+// ---- Data Loading ----
+async function loadData() {
+  try {
+    const res = await fetch('/api/graph');
+    const data = await res.json();
+    graphNodes = data.nodes;
+    graphEdges = data.edges;
+
+    nodeMap = {};
+    graphNodes.forEach((n, i) => { nodeMap[n.id] = i; });
+
+    initSimulation();
+    updateStats(data.stats);
+    buildLegend();
+  } catch (err) {
+    console.error('Failed to load graph data:', err);
+  }
+}
+
+// ---- Polling ----
+async function poll() {
+  try {
+    const res = await fetch('/api/graph');
+    const data = await res.json();
+    if (data.nodes.length !== graphNodes.length || data.edges.length !== graphEdges.length) {
+      const existingPositions = {};
+      simNodes.forEach(sn => {
+        existingPositions[sn.node.id] = { x: sn.x, y: sn.y, z: sn.z };
+      });
+
+      graphNodes = data.nodes;
+      graphEdges = data.edges;
+      nodeMap = {};
+      graphNodes.forEach((n, i) => { nodeMap[n.id] = i; });
+
+      simNodes = graphNodes.map((n) => {
+        const existing = existingPositions[n.id];
+        if (existing) {
+          return { ...existing, vx: 0, vy: 0, vz: 0, node: n };
+        }
+        return {
+          x: (Math.random() - 0.5) * 40,
+          y: (Math.random() - 0.5) * 40,
+          z: (Math.random() - 0.5) * 40,
+          vx: 0, vy: 0, vz: 0,
+          node: n,
+        };
+      });
+
+      while (nodeGroup.children.length > 0) {
+        const child = nodeGroup.children[0];
+        child.geometry.dispose();
+        child.material.dispose();
+        nodeGroup.remove(child);
+      }
+      nodeMeshes = [];
+
+      for (const sn of simNodes) {
+        const mesh = createNodeMesh(sn.node, new THREE.Vector3(sn.x, sn.y, sn.z));
+        if (!existingPositions[sn.node.id]) {
+          mesh.userData.flashTime = 0.5;
+        }
+        nodeGroup.add(mesh);
+        nodeMeshes.push(mesh);
+      }
+
+      rebuildEdges();
+      updateStats(data.stats);
+      buildLegend();
+    }
+  } catch {}
+}
+
+// ---- Main Loop ----
+loadData();
+setInterval(poll, 3000);
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const time = clock.getElapsedTime();
+
+  frameCount++;
+  if (frameCount < 300) {
+    stepSimulation();
+  } else if (frameCount % 10 === 0) {
+    stepSimulation();
+  }
+
+  updateNodeVisuals(time);
+  controls.update();
+  composer.render();
+}
+
+animate();
+</script>
+</body>
+</html>

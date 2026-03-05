@@ -1,0 +1,28 @@
+{
+  "name": "memory-unlimited",
+  "version": "0.1.0",
+  "description": "Cross-provider persistent memory system for AI coding assistants",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "memory-unlimited": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc && mkdir -p dist/dashboard dist/landing && cp src/dashboard/*.html dist/dashboard/ && cp src/landing/*.html dist/landing/",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "chalk": "^5.4.1",
+    "chokidar": "^4.0.3",
+    "commander": "^13.1.0",
+    "@clack/prompts": "^0.10.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.12.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
