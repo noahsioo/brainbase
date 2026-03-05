@@ -1,34 +1,14 @@
 import { Command } from 'commander';
-import { createServer } from 'http';
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { execSync } from 'child_process';
 
 export const siteCommand = new Command('site')
-  .description('Open the Memory Unlimited landing page')
-  .option('-p, --port <port>', 'Port number', '7878')
-  .action((opts) => {
-    const port = parseInt(opts.port, 10);
-
-    const htmlPath = join(__dirname, '..', 'landing', 'index.html');
-    let html: string;
+  .description('Open the Memory Unlimited website')
+  .action(() => {
+    const url = 'https://github.com/noahsioly/memory-unlimited';
+    console.log(`\n  Opening ${url}\n`);
     try {
-      html = readFileSync(htmlPath, 'utf-8');
+      execSync(`open "${url}" 2>/dev/null || xdg-open "${url}" 2>/dev/null || start "${url}" 2>/dev/null`);
     } catch {
-      console.error('Landing page HTML not found at:', htmlPath);
-      process.exit(1);
+      console.log(`  Visit: ${url}\n`);
     }
-
-    const server = createServer((req, res) => {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(html);
-    });
-
-    server.listen(port, () => {
-      console.log(`\n  Memory Unlimited - Landing Page\n`);
-      console.log(`  http://localhost:${port}\n`);
-      console.log(`  Press Ctrl+C to stop.\n`);
-    });
   });

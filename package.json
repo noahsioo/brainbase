@@ -8,7 +8,7 @@
     "memory-unlimited": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc && mkdir -p dist/dashboard dist/landing && cp src/dashboard/*.html dist/dashboard/ && cp src/landing/*.html dist/landing/",
+    "build": "tsc && mkdir -p dist/dashboard && cp src/dashboard/*.html dist/dashboard/",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js"
   },
