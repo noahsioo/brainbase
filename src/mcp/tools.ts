@@ -3,6 +3,7 @@ import { activateByQuery, getActivatedNodes, autoLinkNodes } from '../memory/act
 import { generateContext, type DetailMode } from '../memory/context-generator.js';
 import { processMessage } from '../hooks/user-prompt.js';
 import { createProspectiveMemory } from '../memory/prospective.js';
+import { isPaused } from '../config.js';
 
 export interface ToolDefinition {
   name: string;
@@ -176,6 +177,10 @@ function formatNode(node: Node): string {
 }
 
 export async function handleToolCall(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  if (isPaused()) {
+    return { content: [{ type: 'text', text: 'Memory system is paused. Use the dashboard or CLI to resume.' }] };
+  }
+
   try {
     switch (name) {
       case 'memory_search':

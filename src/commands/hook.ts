@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { isPaused } from '../config.js';
 import { handleSessionStart } from '../hooks/session-start.js';
 import { handleUserPrompt } from '../hooks/user-prompt.js';
 import { handleSessionEnd } from '../hooks/session-end.js';
@@ -46,6 +47,10 @@ export const hookCommand = new Command('hook')
   .argument('<event>', 'Hook event: session-start, user-prompt, session-end, pre-compact')
   .action(async (event: string) => {
     const input = await parseStdinJson();
+
+    if (isPaused()) {
+      return;
+    }
 
     switch (event) {
       case 'session-start': {

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'http';
 import { writeFileSync, readFileSync, existsSync, unlinkSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import { PID_PATH, LOGS_DIR, MEMORY_DIR } from '../config.js';
+import { PID_PATH, LOGS_DIR, MEMORY_DIR, isPaused, setPaused } from '../config.js';
 import type { LLMClient } from '../llm/types.js';
 import { getLLMClient } from '../llm/factory.js';
 import { startSelfHealing, stopSelfHealing } from './self-heal.js';
@@ -15,7 +15,6 @@ const PORT = 7899;
 let server: Server | null = null;
 let client: LLMClient | null = null;
 let queue: PriorityQueue | null = null;
-let paused = false;
 let startedAt = Date.now();
 let messagesProcessed = 0;
 let nodesCreated = 0;
@@ -42,7 +41,7 @@ async function handleEvent(event: string, data: Record<string, unknown>): Promis
     return { error: 'LLM client not initialized' };
   }
 
-  if (paused) {
+  if (isPaused()) {
     return { status: 'paused' };
   }
 
@@ -153,7 +152,7 @@ export async function startDaemon(): Promise<void> {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
       res.end(JSON.stringify({
-        status: paused ? 'paused' : 'ok',
+        status: isPaused() ? 'paused' : 'ok',
         model: client?.getModel() || 'unknown',
         uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
         messages_processed: messagesProcessed,
@@ -164,7 +163,7 @@ export async function startDaemon(): Promise<void> {
     }
 
     if (req.method === 'POST' && req.url === '/pause') {
-      paused = true;
+      setPaused(true);
       log('Watcher paused by user');
       res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
       res.end(JSON.stringify({ status: 'paused' }));
@@ -172,7 +171,7 @@ export async function startDaemon(): Promise<void> {
     }
 
     if (req.method === 'POST' && req.url === '/resume') {
-      paused = false;
+      setPaused(false);
       log('Watcher resumed by user');
       res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
       res.end(JSON.stringify({ status: 'ok' }));
@@ -209,13 +208,13 @@ export async function startDaemon(): Promise<void> {
     console.log(`Watcher daemon started (PID: ${process.pid}, port: ${PORT}, model: ${model})`);
   });
 
-  // Active Consolidation: check every hour, run if 12h+ since last
-  const CONSOLIDATION_INTERVAL = 12 * 60 * 60 * 1000;
+  // M41: Active Consolidation: check every hour, run if 6h+ since last (like sleep cycles)
+  const CONSOLIDATION_INTERVAL = 6 * 60 * 60 * 1000;
   setInterval(async () => {
     try {
       const lastConsolidation = getLastConsolidation();
       if (Date.now() - lastConsolidation > CONSOLIDATION_INTERVAL) {
-        log('Auto-consolidation triggered (12h interval)');
+        log('Auto-consolidation triggered (6h interval)');
         const result = await runConsolidation(client ?? undefined);
         log(`Auto-consolidation done: ${result.nodes_merged} merged, ${result.edges_pruned} pruned, ${result.dream_edges} dreamed`);
       }

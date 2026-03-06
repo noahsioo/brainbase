@@ -1,6 +1,6 @@
 import { homedir } from 'os';
 import { join } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
 
 export const MEMORY_DIR = join(homedir(), '.memory-unlimited');
 export const DATA_DIR = join(MEMORY_DIR, 'data');
@@ -9,6 +9,7 @@ export const BACKUPS_DIR = join(MEMORY_DIR, 'backups');
 export const DB_PATH = join(DATA_DIR, 'memory.db');
 export const CONFIG_PATH = join(MEMORY_DIR, 'config.json');
 export const PID_PATH = join(MEMORY_DIR, 'watcher.pid');
+export const PAUSE_PATH = join(MEMORY_DIR, 'paused');
 export const SOCKET_PATH = join(MEMORY_DIR, 'watcher.sock');
 
 export const PROVIDER_PATHS = {
@@ -121,6 +122,18 @@ export interface MemoryConfig {
   watcher_engine: WatcherEngine;
   cloud_provider?: CloudConfig;
   initialized_at: number;
+}
+
+export function isPaused(): boolean {
+  return existsSync(PAUSE_PATH);
+}
+
+export function setPaused(paused: boolean): void {
+  if (paused) {
+    writeFileSync(PAUSE_PATH, new Date().toISOString());
+  } else {
+    if (existsSync(PAUSE_PATH)) unlinkSync(PAUSE_PATH);
+  }
 }
 
 export function getConfig(): MemoryConfig {

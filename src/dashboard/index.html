@@ -149,6 +149,13 @@ body {
 .legend-item.active { opacity: 1; }
 .legend-item.hidden { opacity: 0.15; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+.legend-overflow {
+  display: flex; align-items: center; gap: 5px;
+  cursor: pointer; opacity: 0.6; transition: all 0.25s; user-select: none;
+  padding: 4px 10px; border-radius: 6px;
+  background: rgba(255,255,255,0.06); font-size: 10px; color: var(--muted);
+}
+.legend-overflow:hover { opacity: 1; background: rgba(255,255,255,0.1); }
 
 #stats-panel {
   pointer-events: auto; position: absolute; bottom: 24px; left: 24px;
@@ -241,8 +248,19 @@ body {
 .dp-close:hover { background: rgba(255,255,255,0.1); color: #fff; }
 .dp-content {
   font-size: 14px; line-height: 1.7; color: #e0e0e0;
-  margin-bottom: 24px; word-break: break-word;
+  margin-bottom: 16px; word-break: break-word;
 }
+.dp-content.collapsed {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dp-expand-btn {
+  font-size: 11px; color: var(--cyan); background: none; border: none;
+  cursor: pointer; padding: 4px 0; margin-bottom: 16px;
+  font-family: 'Inter', sans-serif; opacity: 0.7;
+  transition: opacity 0.2s; display: none;
+}
+.dp-expand-btn:hover { opacity: 1; }
 .dp-bar-group { margin-bottom: 12px; }
 .dp-bar-label {
   font-size: 10px; text-transform: uppercase;
@@ -269,7 +287,7 @@ body {
   font-size: 11px; padding: 6px 12px; border-radius: 8px;
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
   cursor: pointer; transition: all 0.25s; max-width: 100%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .dp-chip:hover {
   background: rgba(0,240,255,0.08); border-color: rgba(0,240,255,0.3);
@@ -651,6 +669,7 @@ body {
       <button class="dp-close" id="dp-close">&times;</button>
     </div>
     <div class="dp-content" id="dp-content"></div>
+    <button class="dp-expand-btn" id="dp-expand">Show more</button>
     <div class="dp-bar-group"><span class="dp-bar-label">Importance</span><div class="dp-bar"><div class="dp-bar-fill" id="dp-importance" style="background:var(--cyan)"></div></div></div>
     <div class="dp-bar-group"><span class="dp-bar-label">Confidence</span><div class="dp-bar"><div class="dp-bar-fill" id="dp-confidence" style="background:var(--purple)"></div></div></div>
     <div class="dp-bar-group"><span class="dp-bar-label">Activation</span><div class="dp-bar"><div class="dp-bar-fill" id="dp-activation" style="background:var(--green)"></div></div></div>
@@ -688,9 +707,30 @@ const TYPE_COLORS = {
   pattern: 0x818CF8, system_knowledge: 0x94A3B8,
   auto_topic: 0x7C8DB5, task: 0xFFB800,
   prospective: 0xFBBF24, tacit: 0xC084FC,
+  entity: 0x06B6D4, episode: 0xF472B6,
+  example: 0x34D399, skill: 0xFB923C,
+  insight: 0xE879F9,
 };
 
-function getColor(type) { return TYPE_COLORS[type] || 0x6B7280; }
+function hashColor(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h);
+  const hue = ((h % 360) + 360) % 360;
+  const s = 65 + (h % 20);
+  const l = 55 + (h % 15);
+  const c = (1 - Math.abs(2 * l / 100 - 1)) * s / 100;
+  const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+  const m = l / 100 - c / 2;
+  let r, g, b;
+  if (hue < 60) { r = c; g = x; b = 0; }
+  else if (hue < 120) { r = x; g = c; b = 0; }
+  else if (hue < 180) { r = 0; g = c; b = x; }
+  else if (hue < 240) { r = 0; g = x; b = c; }
+  else if (hue < 300) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+  return ((Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255));
+}
+function getColor(type) { return TYPE_COLORS[type] || hashColor(type); }
 function getColorHex(type) { return '#' + getColor(type).toString(16).padStart(6, '0'); }
 function formatDate(ts) {
   if (!ts) return '\u2014';
@@ -1204,7 +1244,21 @@ function showDetailPanel(nodeIndex) {
   panel.classList.add('open');
   document.getElementById('dp-type').textContent = node.type;
   document.getElementById('dp-type').style.color = getColorHex(node.type);
-  document.getElementById('dp-content').textContent = node.content;
+  const dpContent = document.getElementById('dp-content');
+  const dpExpand = document.getElementById('dp-expand');
+  dpContent.textContent = node.content;
+  if (node.content && node.content.length > 120) {
+    dpContent.classList.add('collapsed');
+    dpExpand.style.display = 'block';
+    dpExpand.textContent = 'Show more';
+    dpExpand.onclick = () => {
+      const isCollapsed = dpContent.classList.toggle('collapsed');
+      dpExpand.textContent = isCollapsed ? 'Show more' : 'Show less';
+    };
+  } else {
+    dpContent.classList.remove('collapsed');
+    dpExpand.style.display = 'none';
+  }
   document.getElementById('dp-importance').style.width = ((node.importance||0)*100)+'%';
   document.getElementById('dp-importance').style.background = getColorHex(node.type);
   document.getElementById('dp-confidence').style.width = ((node.confidence||0)*100)+'%';
@@ -1216,6 +1270,7 @@ function showDetailPanel(nodeIndex) {
     `<div>Source: <span style="color:#ccc">${node.source||'unknown'}</span></div>`;
   const cc = document.getElementById('dp-connected');
   cc.innerHTML = '';
+  const connectedNodes = [];
   for (const edge of graphEdges) {
     let cid = null;
     if (edge.source_id === node.id) cid = edge.target_id;
@@ -1223,10 +1278,16 @@ function showDetailPanel(nodeIndex) {
     if (!cid) continue;
     const cIdx = nodeMap[cid];
     if (cIdx === undefined) continue;
-    const cn = graphNodes[cIdx];
+    connectedNodes.push({ cn: graphNodes[cIdx], cIdx });
+  }
+  const CHIP_LIMIT = 8;
+  const visibleNodes = connectedNodes.slice(0, CHIP_LIMIT);
+  const hiddenNodes = connectedNodes.slice(CHIP_LIMIT);
+  for (const { cn, cIdx } of visibleNodes) {
     const chip = document.createElement('div');
     chip.className = 'dp-chip';
-    chip.textContent = cn.content.substring(0, 40);
+    chip.textContent = cn.content.length > 40 ? cn.content.substring(0, 40) + '...' : cn.content;
+    chip.title = cn.content;
     chip.style.borderColor = getColorHex(cn.type);
     chip.addEventListener('click', () => {
       selectedNode = cIdx;
@@ -1235,6 +1296,32 @@ function showDetailPanel(nodeIndex) {
       triggerSpreading(cIdx);
     });
     cc.appendChild(chip);
+  }
+  if (hiddenNodes.length > 0) {
+    const moreBtn = document.createElement('div');
+    moreBtn.className = 'dp-chip';
+    moreBtn.textContent = `+${hiddenNodes.length} more`;
+    moreBtn.style.color = 'var(--cyan)';
+    moreBtn.style.cursor = 'pointer';
+    moreBtn.style.textAlign = 'center';
+    moreBtn.addEventListener('click', () => {
+      moreBtn.remove();
+      for (const { cn, cIdx } of hiddenNodes) {
+        const chip = document.createElement('div');
+        chip.className = 'dp-chip';
+        chip.textContent = cn.content.length > 40 ? cn.content.substring(0, 40) + '...' : cn.content;
+        chip.title = cn.content;
+        chip.style.borderColor = getColorHex(cn.type);
+        chip.addEventListener('click', () => {
+          selectedNode = cIdx;
+          flyToNode(cIdx);
+          showDetailPanel(cIdx);
+          triggerSpreading(cIdx);
+        });
+        cc.appendChild(chip);
+      }
+    });
+    cc.appendChild(moreBtn);
   }
 }
 
@@ -1559,11 +1646,22 @@ async function updateHealthRing() {
   } catch {}
 }
 
+const MAX_LEGEND_VISIBLE = 5;
+let legendExpanded = false;
+
 function buildLegend() {
-  const types = [...new Set(graphNodes.map(n => n.type))].sort();
+  const typeCounts = {};
+  for (const n of graphNodes) {
+    typeCounts[n.type] = (typeCounts[n.type] || 0) + 1;
+  }
+  const types = Object.keys(typeCounts).sort((a, b) => typeCounts[b] - typeCounts[a]);
   const legend = document.getElementById('legend');
   legend.innerHTML = '';
-  for (const t of types) {
+
+  const visibleTypes = legendExpanded ? types : types.slice(0, MAX_LEGEND_VISIBLE);
+  const hiddenCount = types.length - MAX_LEGEND_VISIBLE;
+
+  for (const t of visibleTypes) {
     const el = document.createElement('div');
     el.className = 'legend-item' + (hiddenTypes.has(t) ? ' hidden' : ' active');
     el.innerHTML = `<div class="legend-dot" style="background:${getColorHex(t)}"></div>${t}`;
@@ -1581,6 +1679,17 @@ function buildLegend() {
       createFlowParticles();
     });
     legend.appendChild(el);
+  }
+
+  if (hiddenCount > 0) {
+    const overflow = document.createElement('div');
+    overflow.className = 'legend-overflow';
+    overflow.textContent = legendExpanded ? 'less' : `+${hiddenCount}`;
+    overflow.addEventListener('click', () => {
+      legendExpanded = !legendExpanded;
+      buildLegend();
+    });
+    legend.appendChild(overflow);
   }
 }
 
