@@ -9,6 +9,7 @@ export interface KeywordFlags {
   explicit_memory: boolean;
   task: boolean;
   emotion_intensity: number;
+  self_generated: boolean;
 }
 
 // Frustrations-Keywords (DE + EN)
@@ -143,6 +144,14 @@ export const TASK_KEYWORDS: KeywordEntry[] = [
   { word: 'modify', intensity: 0.6 },
 ];
 
+// M38: Self-Generated Insight Patterns (DE + EN)
+const SELF_GENERATED_PATTERNS = [
+  /\b(ich glaub|ich denk|mein plan|ich hab verstanden|ah,? ich|mir ist klar)/i,
+  /\b(ich bin der meinung|meiner meinung nach|mein fazit|ich schliesse daraus)/i,
+  /\b(i think|i believe|my plan|i understand|oh,? i see|i realized|my takeaway)/i,
+  /\b(i figured out|it clicked|now i get|my conclusion|i learned that)/i,
+];
+
 export function detectKeywordFlags(text: string): KeywordFlags {
   const lower = text.toLowerCase();
 
@@ -178,11 +187,20 @@ export function detectKeywordFlags(text: string): KeywordFlags {
     }
   }
 
+  let self_generated = false;
+  for (const pattern of SELF_GENERATED_PATTERNS) {
+    if (pattern.test(text)) {
+      self_generated = true;
+      break;
+    }
+  }
+
   return {
     frustration,
     decision,
     explicit_memory,
     task,
     emotion_intensity: maxEmotion,
+    self_generated,
   };
 }

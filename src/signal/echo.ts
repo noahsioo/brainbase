@@ -93,3 +93,30 @@ export function applyFeedbackToRecentNodes(signal: FeedbackSignal): number {
 
   return affected;
 }
+
+// M25: Somatic Markers — accumulate emotional valence on entities over time
+export function applySomaticMarkers(signal: FeedbackSignal): void {
+  if (signal === 'neutral') return;
+
+  const db = getDb();
+  const recentEntities = db.prepare(`
+    SELECT id, metadata FROM nodes
+    WHERE type = 'entity' AND activation > 0.1
+    ORDER BY activation DESC LIMIT 10
+  `).all() as Array<{ id: string; metadata: string | null }>;
+
+  const delta = signal === 'positive' ? 0.1 : -0.1;
+
+  for (const entity of recentEntities) {
+    let meta: Record<string, unknown> = {};
+    try { meta = entity.metadata ? JSON.parse(entity.metadata) : {}; }
+    catch { meta = {}; }
+
+    const currentValence = (meta.valence as number) || 0;
+    const newValence = Math.max(-1.0, Math.min(1.0, currentValence + delta));
+    meta.valence = newValence;
+
+    db.prepare('UPDATE nodes SET metadata = ? WHERE id = ?')
+      .run(JSON.stringify(meta), entity.id);
+  }
+}
