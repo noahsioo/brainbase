@@ -119,7 +119,20 @@ function scoreEntityNucleus(text: string, entities: string[]): number {
   const infoDensity = calculateInfoDensity(text);
   const repetition = getRepetitionScore(entities);
   const coOccurrence = getCoOccurrenceScore(entities);
-  return 0.4 * infoDensity + 0.3 * repetition + 0.3 * coOccurrence;
+  let score = 0.4 * infoDensity + 0.3 * repetition + 0.3 * coOccurrence;
+
+  // M5: Adaptive Thresholds — frequent topics pass more easily
+  if (entities.length > 0) {
+    let avgThreshold = 0;
+    for (const e of entities.slice(0, 5)) {
+      avgThreshold += getAdaptiveThreshold(e);
+    }
+    avgThreshold /= Math.min(entities.length, 5);
+    // Lower threshold → higher effective score (easier to pass gates)
+    score *= (0.5 / Math.max(0.2, avgThreshold));
+  }
+
+  return Math.min(1.0, score);
 }
 
 function scoreEmotionNucleus(text: string, flags: KeywordFlags): number {
@@ -212,6 +225,45 @@ function detectSalienceMode(text: string, nuclei: ThalamicSignal['nuclei']): Sal
   return 'default';
 }
 
+// ── M5: Adaptive Thresholds ─────────────────────────────────
+
+function getAdaptiveThreshold(entity: string): number {
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT value FROM system_state WHERE key = ?")
+      .get(`adaptive_threshold_${entity}`) as { value: string } | undefined;
+    if (row) return parseFloat(row.value);
+  } catch { /* first time */ }
+  return 0.5;
+}
+
+function updateAdaptiveThresholds(entities: string[], sessionId: string): void {
+  const db = getDb();
+  const seen = new Set(entities);
+
+  for (const entity of entities) {
+    const current = getAdaptiveThreshold(entity);
+    const lowered = Math.max(0.2, current - 0.01);
+    db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run(`adaptive_threshold_${entity}`, String(lowered), Date.now());
+  }
+
+  // Raise thresholds for recently active but now absent entities
+  try {
+    const recent = db.prepare(
+      "SELECT key, value FROM system_state WHERE key LIKE 'adaptive_threshold_%' ORDER BY updated_at DESC LIMIT 30"
+    ).all() as Array<{ key: string; value: string }>;
+    for (const row of recent) {
+      const entityName = row.key.replace('adaptive_threshold_', '');
+      if (!seen.has(entityName)) {
+        const raised = Math.min(0.8, parseFloat(row.value) + 0.005);
+        db.prepare("UPDATE system_state SET value = ?, updated_at = ? WHERE key = ?")
+          .run(String(raised), Date.now(), row.key);
+      }
+    }
+  } catch { /* non-fatal */ }
+}
+
 // ── Main Function ───────────────────────────────────────────
 
 export function processThalamic(text: string, sessionId: string): ThalamicSignal {
@@ -220,6 +272,9 @@ export function processThalamic(text: string, sessionId: string): ThalamicSignal
 
   const updatedCounters = updateCounters(entities, sessionId);
   checkAutoNodeCreation(updatedCounters);
+
+  // M5: Update adaptive thresholds for seen/unseen entities
+  updateAdaptiveThresholds(entities, sessionId);
 
   // 4 Nuclei
   const entityRaw = scoreEntityNucleus(text, entities);

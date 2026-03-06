@@ -599,8 +599,13 @@ export function autoLinkNodes(nodeId: string): Edge[] {
 
   if (node.type === 'auto_topic') return [];
 
+  // M7: Latent Inhibition — high-frequency nodes form fewer new connections
+  const effectiveMaxEdges = node.activation_count > 50
+    ? Math.ceil(AUTO_LINK_MAX_EDGES / 2)
+    : AUTO_LINK_MAX_EDGES;
+
   // Try semantic auto-linking first
-  const semanticEdges = semanticAutoLink(nodeId, node);
+  const semanticEdges = semanticAutoLink(nodeId, node, effectiveMaxEdges);
   if (semanticEdges) return semanticEdges;
 
   // Fallback: keyword-based auto-linking
@@ -615,7 +620,7 @@ export function autoLinkNodes(nodeId: string): Edge[] {
   const createdEdges: Edge[] = [];
 
   for (const other of allNodes) {
-    if (createdEdges.length >= AUTO_LINK_MAX_EDGES) break;
+    if (createdEdges.length >= effectiveMaxEdges) break;
 
     const existing = getEdgeBetween(nodeId, other.id);
     if (existing) continue;
@@ -637,7 +642,7 @@ export function autoLinkNodes(nodeId: string): Edge[] {
   return createdEdges;
 }
 
-function semanticAutoLink(nodeId: string, node: Node): Edge[] | null {
+function semanticAutoLink(nodeId: string, node: Node, maxEdges: number = AUTO_LINK_MAX_EDGES): Edge[] | null {
   const nodeVec = getEmbedding(nodeId);
   if (!nodeVec) return null;
 
@@ -658,8 +663,8 @@ function semanticAutoLink(nodeId: string, node: Node): Edge[] | null {
 
   similarities.sort((a, b) => b.sim - a.sim);
 
-  for (const match of similarities.slice(0, AUTO_LINK_MAX_EDGES)) {
-    if (createdEdges.length >= AUTO_LINK_MAX_EDGES) break;
+  for (const match of similarities.slice(0, maxEdges)) {
+    if (createdEdges.length >= maxEdges) break;
 
     const existing = getEdgeBetween(nodeId, match.id);
     if (existing) continue;

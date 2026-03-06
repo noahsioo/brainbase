@@ -59,6 +59,46 @@ function updateSessionFocus(sessionId: string, newEntities: string[]): string[] 
     .map(([entity]) => entity);
 }
 
+// M32: Task Switching Cost — fade old topic, ramp new topic
+function applyTaskSwitchingCost(sessionId: string, currentTopic: string | undefined): void {
+  if (!currentTopic) return;
+
+  const db = getDb();
+  const key = `prev_topic_${sessionId}`;
+
+  let prevTopic: string | undefined;
+  try {
+    const row = db.prepare("SELECT value FROM system_state WHERE key = ?")
+      .get(key) as { value: string } | undefined;
+    if (row) prevTopic = row.value;
+  } catch { /* first message */ }
+
+  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+    .run(key, currentTopic, Date.now());
+
+  if (!prevTopic || prevTopic === currentTopic) return;
+
+  // Topic changed — fade old topic nodes
+  const prevWords = prevTopic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  if (prevWords.length === 0) return;
+
+  const activeNodes = db.prepare(
+    'SELECT id, content, activation FROM nodes WHERE activation > 0.1 LIMIT 30'
+  ).all() as Array<{ id: string; content: string; activation: number }>;
+
+  for (const node of activeNodes) {
+    const contentLower = node.content.toLowerCase();
+    const isOldTopic = prevWords.some(w => contentLower.includes(w));
+    const newWords = currentTopic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const isNewTopic = newWords.some(w => contentLower.includes(w));
+
+    if (isOldTopic && !isNewTopic) {
+      const faded = node.activation * 0.7;
+      db.prepare('UPDATE nodes SET activation = ? WHERE id = ?').run(faded, node.id);
+    }
+  }
+}
+
 export async function processMessage(input: ProcessMessageInput): Promise<ProcessMessageResult> {
   const sessionId = input.session_id || `session-${Date.now()}`;
   const provider = input.provider || 'mcp';
@@ -83,6 +123,9 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   // M28: Stable session focus instead of volatile per-message entities
   const focusEntities = updateSessionFocus(sessionId, signal.entities.slice(0, 5));
   const currentTopic = focusEntities.length > 0 ? focusEntities.slice(0, 3).join(' ') : undefined;
+
+  // M32: Task Switching Cost — smooth transition when topic changes
+  applyTaskSwitchingCost(sessionId, currentTopic);
 
   const feedback = detectFeedbackSignal(input.message);
   applyFeedbackToRecentNodes(feedback);
@@ -169,6 +212,19 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
 
     primeActivations(0.3);
     activateByConversation(messages, sessionId);
+
+    // M6: Sensory Gating — apply dampening to over-mentioned entities
+    if (Object.keys(signal.dampening).length > 0) {
+      for (const [entity, factor] of Object.entries(signal.dampening)) {
+        const matches = db.prepare(
+          "SELECT id, activation FROM nodes WHERE LOWER(content) = LOWER(?) AND activation > 0"
+        ).all(entity) as Array<{ id: string; activation: number }>;
+        for (const match of matches) {
+          db.prepare('UPDATE nodes SET activation = ? WHERE id = ?')
+            .run(match.activation * factor, match.id);
+        }
+      }
+    }
 
     const currentEntities = getCurrentlyActivatedEntityIds();
     const previousEntities = getLastSTDPEntities(sessionId);
