@@ -1,61 +1,126 @@
 import type { LLMClient } from '../llm/types.js';
-import { addNode, getNode, updateNode, searchNodes, getDb, type Node } from '../memory/store.js';
+import { addNode, getNode, updateNode, searchNodes, getDb, getOrCreateEntity, findEntityByName, getEdgeBetween, addEdge, strengthenEdge, getAllEntities, type Node, type NodeMetadata } from '../memory/store.js';
 import { autoLinkNodes } from '../memory/activation.js';
 import type { KeywordFlags } from '../signal/keywords.js';
-import { verifyExtraction, type ExtractionResponse } from '../extraction/verification.js';
+import { verifyExtraction, verifyEntity, verifyRelation, isGarbage, type ExtractionResponse, type ExtractedEntity, type ExtractedRelation } from '../extraction/verification.js';
 import { analyzeStyleForCategory } from '../learning/style-analyzer.js';
 import { queueEmbedding } from '../llm/embeddings.js';
+import { generateContext } from '../memory/context-generator.js';
 
 const CONFIDENCE_CAP = 0.8;
 
+// M36+M38+M39+M40: Read encoding signal from system_state
+interface EncodingSignal {
+  novelty: number;
+  prediction_error: number;
+  self_generated: boolean;
+  emotion_intensity: number;
+  session_topic?: string;
+  mood: string;
+  provider: string;
+  message_index: number;
+}
+
+function readEncodingSignal(sessionId: string): EncodingSignal | null {
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT value FROM system_state WHERE key = ?")
+      .get(`encoding_signal_${sessionId}`) as { value: string } | undefined;
+    if (row) return JSON.parse(row.value);
+  } catch { /* skip */ }
+  return null;
+}
+
+function calculateImportanceBoost(signal: EncodingSignal | null): number {
+  if (!signal) return 0;
+  let boost = 0;
+  if (signal.self_generated) boost += 0.2;          // M38
+  if (signal.novelty > 0.8) boost += 0.15;          // M39
+  if (signal.novelty < 0.2) boost -= 0.1;           // M39
+  if (signal.prediction_error > 0.7) boost += 0.15; // M40
+  return boost;
+}
+
 function buildSystemPrompt(frustration: boolean): string {
-  const base = `You are the Hippocampus of an AI memory system. Your job is to decide:
-What from this conversation is WORTH remembering?
+  const base = `You are the Hippocampus of an AI memory system. You encode experiences into ENTITIES and RELATIONSHIPS — like a real brain.
 
-Rules:
-1. Only store CONCRETE, SPECIFIC information
-   GOOD: "User's name is Lovis, building Memory Unlimited with TypeScript"
-   BAD: "There are weaknesses in the system"
-   BAD: "User wants to do something"
+A brain does NOT store sentences. It stores CONCEPTS (neurons) connected by WEIGHTED RELATIONSHIPS (synapses).
 
-2. Store CONCEPTS, not words
-   GOOD: "User prefers direct communication, no filler"
-   BAD: "User says 'digga' a lot"
+Your job: Extract ENTITIES and RELATIONS from the conversation.
 
-3. Summarize instead of copying verbatim
-   GOOD: "User frustrated because memory system stores garbage instead of real memories"
-   BAD: "Das System macht nur Scheisse"
+## QUALITY TEST (MOST IMPORTANT RULE)
+Before storing ANYTHING, ask yourself: "Would this be useful context in 2 weeks?"
+- "User uses TypeScript" → YES (helps future sessions)
+- "User is exploring ideas" → NO (vague, useless)
+- "User prefers tabs over spaces" → YES (concrete preference)
+- "User was working on something" → NO (what specifically?)
+- "Bevorzugt funktionale Programmierung ueber OOP" → YES (actionable preference)
+- "User discussed philosophical topics" → NO (says nothing concrete)
 
-4. If the message contains NO new information → nothing_new: true
-   Smalltalk, confirmations ("ok", "ja genau", "weiter"), pure code requests → store NOTHING
+If the answer is NO → do NOT store it. Set nothing_new: true instead.
 
-5. Types:
-   - identity: Who is the user? Name, age, job, location
-   - preference: What does the user like/want? How do they work?
-   - decision: What was decided? Why?
-   - project: What is the user working on? Tech stack?
-   - learning: What did the user learn? What was new?
-   - task: What needs to be done?
-   - insight: Cross-cutting insights, patterns
-   - example: The user shares an EXAMPLE of their work (a text they wrote, code they produced,
-     a template they use, a message they crafted). Store the FULL text, not a summary.
-     Examples are gold - they show HOW the user does things, not just WHAT.
-     Add metadata.category (e.g. "youtube_description", "email", "code_review", "commit_message").
+## NEGATIVE EXAMPLES (NEVER store these)
+- "User is exploring consciousness and brain mechanics"
+- "User was thinking about deep questions"
+- "The conversation covered philosophical topics"
+- "User is curious about how things work"
+- "User wants to continue with the project"
+- "User expressed excitement about the system"
+- "User has ideas about X" (what ideas specifically?)
+- "User discussed Y" (what was the conclusion?)
+- "User is working on improvements"
+- "User is building a system"
+- Any observation about the user's emotional state
+- Any summary of what the conversation was "about"
 
-6. Keep content under 150 chars for normal types, but examples can be up to 2000 chars
-7. confidence between 0.3 and 0.8 - NEVER higher
-8. One fact per entry - don't combine multiple facts
+## POSITIVE EXAMPLES (GOOD extractions)
+- Entity: "Supabase" (technology) — concrete, named
+- Relation: "Lovis" → uses → "better-sqlite3" — specific
+- Fact: "Bevorzugt funktionale Programmierung ueber OOP" — actionable preference
+- Decision: "Wechsel von Firebase zu Supabase wegen Kosten" — specific decision with reason
 
-9. You can also UPDATE existing knowledge if the new message changes or extends it.
-   Use the "updates" array for this. Only update when there is a real change.`;
+## ENTITIES
+Atomic concepts: people, technologies, projects, tools, places, foods, skills, organizations.
+Each entity must be a SINGLE named concept, not a phrase or description.
+- GOOD entities: "Lovis", "TypeScript", "Memory Unlimited", "Berlin", "React"
+- BAD entities: "the system", "it", "something", "a thing", "brain", "idea", "concept"
+
+Entity types: person, technology, project, concept, tool, food, place, organization, skill, language, framework, library, service, topic
+
+## RELATIONS
+How entities connect: uses, likes, dislikes, builds, knows, part_of, works_with, prefers, wants, is_a, located_at, has_skill, created_by, member_of, speaks, interested_in, depends_on, enables, related_to
+- GOOD: { "from": "Lovis", "to": "TypeScript", "type": "uses" }
+- BAD: { "from": "User", "to": "system", "type": "related_to" }
+
+## FACTS (only for complex info that doesn't fit as entity+relation)
+Still use facts for:
+- Complex insights that need a sentence
+- Decisions with reasoning
+- Examples of user's work (full text, up to 2000 chars)
+- Episodes or experiences
+
+Fact types: preference, fact, decision, task, project, learning, identity, insight, example
+
+## ABSOLUTE RULES
+1. If NOTHING new → nothing_new: true
+2. Smalltalk, confirmations, code requests, greetings, "let's continue" → NOTHING
+3. NEVER store vague garbage like "User is exploring...", "User wants to build a system that...", "User believes..."
+4. Only store CONCRETE, NAMED things: a person, a technology, a decision, a preference
+5. confidence between 0.3 and 0.8
+6. Prefer entities+relations over facts. Use facts only when a triple doesn't capture it
+7. "User" or the user's name is always a valid entity (type: person)
+8. Max 5 entities per message. If more → keep only the most important
+9. You can UPDATE existing knowledge via the "updates" array
+10. Stream-of-consciousness monologues without concrete info → NOTHING
+11. Meta-comments about the conversation itself → NOTHING`;
 
   if (frustration) {
     return base + `
 
 FRUSTRATION MODE:
 - The user is frustrated. Extract the CAUSE, not the emotion.
-- Write "X causes problems" not "user hates X"
-- Do NOT use emotional language in content fields`;
+- Store the cause as a relation: Entity → "dislikes" → CauseEntity
+- Do NOT use emotional language in entity names`;
   }
 
   return base;
@@ -66,18 +131,33 @@ function buildExtractionPrompt(
   existingNodes: Node[],
   recentContext?: string,
 ): string {
+  // M34: Structured knowledge profile instead of raw node list
   let nodesContext = '';
-  if (existingNodes.length > 0) {
-    const nodeList = existingNodes
-      .slice(0, 15)
-      .map(n => `- "${n.content}" (type: ${n.type}, confidence: ${n.confidence.toFixed(1)})`)
-      .join('\n');
-    nodesContext = `\nExisting knowledge (do NOT store again unless it CHANGED or got EXTENDED):\n${nodeList}\n`;
+  try {
+    const knowledgeProfile = generateContext('MINIMAL');
+    const hasKnowledge = knowledgeProfile &&
+      knowledgeProfile !== 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.';
+
+    if (hasKnowledge) {
+      nodesContext = `\nWhat you already know about this person:\n${knowledgeProfile}\n\nOnly store things that are NEW and CONCRETE. Do NOT repeat what you already know.\n`;
+    }
+  } catch { /* fallback to entity names only */ }
+
+  // Keep entity names for dedup (prevents "TS" instead of "TypeScript")
+  const entities = existingNodes.filter(n => n.type === 'entity');
+  if (entities.length > 0) {
+    const entityNames = entities.slice(0, 15)
+      .map(n => {
+        const meta = n.metadata ? JSON.parse(n.metadata) : {};
+        return `"${n.content}" (${meta.entity_type || 'concept'})`;
+      })
+      .join(', ');
+    nodesContext += `\nKnown entity names (reuse, don't duplicate): ${entityNames}\n`;
   }
 
   let conversationBlock: string;
   if (recentContext) {
-    conversationBlock = `Recent conversation for context:\n${recentContext}\n\nExtract facts from the LATEST message(s) above. Use the earlier messages only for context.`;
+    conversationBlock = `Recent conversation for context:\n${recentContext}\n\nExtract from the LATEST message(s). Use earlier messages only for context.`;
   } else {
     conversationBlock = `New message: "${message}"`;
   }
@@ -88,16 +168,23 @@ ${conversationBlock}
 Respond with this exact JSON:
 {
   "nothing_new": true or false,
+  "entities": [
+    { "name": "EntityName", "type": "person|technology|project|concept|tool|food|place|organization|skill|language|framework|library" }
+  ],
+  "relations": [
+    { "from": "EntityA", "to": "EntityB", "type": "uses|likes|dislikes|builds|knows|part_of|works_with|prefers|wants|is_a|located_at|has_skill|related_to", "confidence": 0.3-0.8 }
+  ],
   "new_facts": [
-    { "content": "...", "type": "identity|preference|decision|project|learning|task|insight|fact|example", "confidence": 0.3-0.8, "metadata": { "category": "optional_category" } }
+    { "content": "...", "type": "preference|fact|decision|task|project|learning|identity|insight|example", "confidence": 0.3-0.8, "metadata": { "category": "optional" } }
   ],
   "updates": [
-    { "existing_content": "exact content of existing node to update", "new_content": "updated content", "reason": "what changed" }
+    { "existing_content": "exact content to update", "new_content": "updated content", "reason": "what changed" }
   ],
   "emotion": { "type": "neutral|frustrated|excited|curious", "intensity": 0.0-1.0 }
 }
 
-If nothing_new is true, new_facts and updates MUST be empty arrays.`;
+If nothing_new is true, ALL arrays MUST be empty.
+Prefer entities+relations over facts. Facts are for complex info only.`;
 }
 
 function getRecentMessages(sessionId: string, limit: number = 10): string {
@@ -164,7 +251,6 @@ export async function extractFromMessage(
       if (!update.existing_content || !update.new_content) continue;
       if (update.new_content.length < 5 || update.new_content.length > 300) continue;
 
-      // Find the existing node by content match
       for (const node of existingNodes) {
         if (node.content.toLowerCase().trim() === update.existing_content.toLowerCase().trim()) {
           updateNode(node.id, { content: update.new_content.trim() });
@@ -174,44 +260,151 @@ export async function extractFromMessage(
     }
   }
 
-  if (response.nothing_new || !Array.isArray(response.new_facts) || response.new_facts.length === 0) {
-    return [];
-  }
-
-  const verified = verifyExtraction(response, existingNodes);
-
-  // Skip the old enrichment system - it appended garbage words
-  // verified.enrichments are ignored now
-
   const createdNodes: Node[] = [];
 
-  for (const fact of verified.new_facts) {
-    const maxLen = fact.type === 'example' ? 2000 : 300;
-    if (!fact.content || fact.content.length < 5 || fact.content.length > maxLen) continue;
+  // ── Process Entities ──────────────────────────────────────
+  const entityNodeMap = new Map<string, Node>(); // name (lowercase) → node
 
-    const validTypes = ['preference', 'fact', 'decision', 'task', 'project', 'learning', 'identity', 'insight', 'example'];
-    if (!validTypes.includes(fact.type)) continue;
-
-    const confidence = Math.min(CONFIDENCE_CAP, Math.max(0, fact.confidence));
-
-    const emotionalTag = flags?.frustration ? 'frustration' :
-      (response.emotion?.type && response.emotion.type !== 'neutral' ? response.emotion.type : undefined);
-
-    const node = addNode(fact.content.trim(), fact.type, {
-      importance: fact.type === 'example' ? 0.75 : confidence * 0.9,
-      confidence,
-      emotional_tag: emotionalTag,
-      source: `llm:${sessionId}`,
-      metadata: fact.metadata,
+  if (Array.isArray(response.entities)) {
+    // Pre-load existing person entities so "User" can be mapped to real name
+    const existingEntities = getAllEntities(20);
+    const existingPerson = existingEntities.find(e => {
+      if (!e.metadata) return false;
+      try {
+        const meta = JSON.parse(e.metadata);
+        return meta.entity_type === 'person' && e.content.toLowerCase() !== 'user';
+      } catch { return false; }
     });
 
-    autoLinkNodes(node.id);
-    queueEmbedding(node.id, node.content);
-    createdNodes.push(node);
+    for (const rawEntity of response.entities.slice(0, 5)) {
+      const entity = verifyEntity(rawEntity);
+      if (!entity) continue;
 
-    // Trigger style analysis when example is created via LLM
-    if (fact.type === 'example' && fact.metadata?.category) {
-      try { analyzeStyleForCategory(fact.metadata.category); } catch { /* non-critical */ }
+      // Map "User" to existing person entity if one exists
+      if (entity.name.toLowerCase() === 'user' && existingPerson) {
+        entityNodeMap.set('user', existingPerson);
+        continue;
+      }
+
+      const node = getOrCreateEntity(entity.name, entity.type, {
+        source: `llm:${sessionId}`,
+      });
+
+      entityNodeMap.set(entity.name.toLowerCase(), node);
+      queueEmbedding(node.id, node.content);
+
+      // Only count as "created" if it's actually new (created within last second)
+      if (Date.now() - node.created_at < 1000) {
+        createdNodes.push(node);
+      }
+    }
+  }
+
+  // ── Process Relations ─────────────────────────────────────
+  // Build a type lookup from entities array for better typing
+  const entityTypeLookup = new Map<string, string>();
+  if (Array.isArray(response.entities)) {
+    for (const e of response.entities) {
+      if (e.name && e.type) entityTypeLookup.set(e.name.trim().toLowerCase(), e.type);
+    }
+  }
+
+  if (Array.isArray(response.relations)) {
+    const knownNames = new Set(entityNodeMap.keys());
+    for (const rawRel of response.relations) {
+      if (rawRel.from) knownNames.add(rawRel.from.trim().toLowerCase());
+      if (rawRel.to) knownNames.add(rawRel.to.trim().toLowerCase());
+    }
+
+    for (const rawRel of response.relations) {
+      const rel = verifyRelation(rawRel, knownNames);
+      if (!rel) continue;
+
+      const fromKey = rel.from.toLowerCase();
+      const toKey = rel.to.toLowerCase();
+
+      // Always use getOrCreateEntity for reinforcement
+      let fromNode = entityNodeMap.get(fromKey);
+      if (!fromNode) {
+        const fromType = entityTypeLookup.get(fromKey) || 'concept';
+        fromNode = getOrCreateEntity(rel.from, fromType, { source: `llm:${sessionId}` });
+        entityNodeMap.set(fromKey, fromNode);
+        queueEmbedding(fromNode.id, fromNode.content);
+      }
+
+      let toNode = entityNodeMap.get(toKey);
+      if (!toNode) {
+        const toType = entityTypeLookup.get(toKey) || 'concept';
+        toNode = getOrCreateEntity(rel.to, toType, { source: `llm:${sessionId}` });
+        entityNodeMap.set(toKey, toNode);
+        queueEmbedding(toNode.id, toNode.content);
+      }
+
+      // Create or strengthen edge
+      const existingEdge = getEdgeBetween(fromNode.id, toNode.id);
+      if (existingEdge) {
+        strengthenEdge(existingEdge.id, 0.05);
+      } else {
+        addEdge(fromNode.id, toNode.id, rel.type, rel.confidence * 0.8, {
+          source_session: sessionId,
+          extraction_confidence: rel.confidence,
+        });
+      }
+    }
+  }
+
+  // ── Process Facts (legacy + complex info) ─────────────────
+  if (response.nothing_new && (!response.entities || response.entities.length === 0)) {
+    return createdNodes;
+  }
+
+  // M36+M38+M39+M40: Read encoding signal for importance modifiers + encoding context
+  const encodingSig = readEncodingSignal(sessionId);
+  const importanceBoost = calculateImportanceBoost(encodingSig);
+  const encodingContext = encodingSig ? {
+    session_topic: encodingSig.session_topic,
+    mood: encodingSig.mood,
+    provider: encodingSig.provider,
+    message_index: encodingSig.message_index,
+  } : undefined;
+
+  if (Array.isArray(response.new_facts) && response.new_facts.length > 0) {
+    const verified = verifyExtraction(response, existingNodes);
+
+    for (const fact of verified.new_facts) {
+      const maxLen = fact.type === 'example' ? 2000 : 300;
+      if (!fact.content || fact.content.length < 5 || fact.content.length > maxLen) continue;
+      if (isGarbage(fact.content)) continue;
+
+      const validTypes = ['preference', 'fact', 'decision', 'task', 'project', 'learning', 'identity', 'insight', 'example'];
+      if (!validTypes.includes(fact.type)) continue;
+
+      const confidence = Math.min(CONFIDENCE_CAP, Math.max(0, fact.confidence));
+
+      const emotionalTag = flags?.frustration ? 'frustration' :
+        (response.emotion?.type && response.emotion.type !== 'neutral' ? response.emotion.type : undefined);
+
+      const baseImportance = fact.type === 'example' ? 0.75 : confidence * 0.9;
+      const finalImportance = Math.max(0.1, Math.min(1.0, baseImportance + importanceBoost));
+
+      const node = addNode(fact.content.trim(), fact.type, {
+        importance: finalImportance,
+        confidence,
+        emotional_tag: emotionalTag,
+        source: `llm:${sessionId}`,
+        metadata: {
+          ...fact.metadata,
+          encoding_context: encodingContext,
+        } as NodeMetadata,
+      });
+
+      autoLinkNodes(node.id);
+      queueEmbedding(node.id, node.content);
+      createdNodes.push(node);
+
+      if (fact.type === 'example' && fact.metadata?.category) {
+        try { analyzeStyleForCategory(fact.metadata.category); } catch { /* non-critical */ }
+      }
     }
   }
 

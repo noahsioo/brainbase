@@ -1,6 +1,39 @@
-import { addNode, searchNodes, type Node } from '../memory/store.js';
+import { addNode, addEdge, searchNodes, getDb, type Node, type NodeMetadata } from '../memory/store.js';
 import { autoLinkNodes } from '../memory/activation.js';
 import { type KeywordFlags } from '../signal/keywords.js';
+import { calculateQualityScore, isGarbage } from './verification.js';
+
+// M36+M38+M39+M40: Read encoding signal from system_state
+interface EncodingSignal {
+  novelty: number;
+  prediction_error: number;
+  self_generated: boolean;
+  emotion_intensity: number;
+  session_topic?: string;
+  mood: string;
+  provider: string;
+  message_index: number;
+}
+
+function readEncodingSignal(sessionId: string): EncodingSignal | null {
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT value FROM system_state WHERE key = ?")
+      .get(`encoding_signal_${sessionId}`) as { value: string } | undefined;
+    if (row) return JSON.parse(row.value);
+  } catch { /* skip */ }
+  return null;
+}
+
+function calculateImportanceBoost(signal: EncodingSignal | null): number {
+  if (!signal) return 0;
+  let boost = 0;
+  if (signal.self_generated) boost += 0.2;          // M38
+  if (signal.novelty > 0.8) boost += 0.15;          // M39
+  if (signal.novelty < 0.2) boost -= 0.1;           // M39
+  if (signal.prediction_error > 0.7) boost += 0.15; // M40
+  return boost;
+}
 
 export interface ExtractionResult {
   nodes_created: number;
@@ -133,12 +166,31 @@ function isDuplicate(content: string): Node | null {
   return null;
 }
 
+// M49: Interference Management — detect content overlap between old and new preferences
+function calculateContentOverlap(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  const wordsB = new Set(b.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+  const intersection = [...wordsA].filter(w => wordsB.has(w)).length;
+  return intersection / Math.min(wordsA.size, wordsB.size);
+}
+
 export function extractFromPrompt(prompt: string, sessionId: string, flags?: KeywordFlags): ExtractionResult {
   const result: ExtractionResult = {
     nodes_created: 0,
     nodes_activated: 0,
     edges_created: 0,
   };
+
+  // M36+M38+M39+M40: Read encoding signal for importance modifiers
+  const encodingSig = readEncodingSignal(sessionId);
+  const importanceBoost = calculateImportanceBoost(encodingSig);
+  const encodingContext = encodingSig ? {
+    session_topic: encodingSig.session_topic,
+    mood: encodingSig.mood,
+    provider: encodingSig.provider,
+    message_index: encodingSig.message_index,
+  } : undefined;
 
   for (const pattern of PATTERNS) {
     const match = prompt.match(pattern.regex);
@@ -158,6 +210,8 @@ export function extractFromPrompt(prompt: string, sessionId: string, flags?: Key
 
     if (content.length > 200) continue;
     if (!isValidContent(content, pattern.type)) continue;
+    if (isGarbage(content)) continue;
+    if (calculateQualityScore(content, pattern.type) < 0.3) continue;
 
     const existingNode = isDuplicate(content);
     if (existingNode) {
@@ -166,14 +220,31 @@ export function extractFromPrompt(prompt: string, sessionId: string, flags?: Key
     }
 
     const emotionalTag = pattern.emotional_tag || (flags?.frustration ? 'frustration' : undefined);
+    const finalImportance = Math.max(0.1, Math.min(1.0, pattern.importance + importanceBoost));
 
     const node = addNode(content, pattern.type, {
-      importance: pattern.importance,
+      importance: finalImportance,
       emotional_tag: emotionalTag,
       source: `extract:${sessionId}`,
+      metadata: encodingContext ? { encoding_context: encodingContext } as NodeMetadata : undefined,
     });
 
     result.nodes_created++;
+
+    // M49: Interference Management — mark superseded preferences/decisions
+    if (pattern.type === 'preference' || pattern.type === 'decision') {
+      const similar = searchNodes(content, 5).filter(n =>
+        n.type === pattern.type && n.id !== node.id
+      );
+      for (const old of similar) {
+        const overlap = calculateContentOverlap(old.content, content);
+        if (overlap > 0.4) {
+          addEdge(old.id, node.id, 'replaced_by', 0.8);
+          result.edges_created++;
+          break;
+        }
+      }
+    }
 
     const newEdges = autoLinkNodes(node.id);
     result.edges_created += newEdges.length;
