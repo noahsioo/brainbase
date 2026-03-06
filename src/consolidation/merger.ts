@@ -3,10 +3,13 @@ import {
   updateNode,
   deleteNode,
   getEdgesForNode,
+  getEdgeBetween,
+  getEmbedding,
   addEdge,
   type Node,
 } from '../memory/store.js';
 import { isSimilar } from '../extraction/verification.js';
+import { cosineSimilarity } from '../llm/embeddings.js';
 
 export interface MergeResult {
   nodes_merged: number;
@@ -45,6 +48,26 @@ function enrichContent(winner: string, loser: string): string {
   return merged;
 }
 
+function separatePatterns(a: Node, b: Node): void {
+  const wordsA = new Set(a.content.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+  const wordsB = new Set(b.content.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+
+  const uniqueA = [...wordsA].filter(w => !wordsB.has(w));
+  const uniqueB = [...wordsB].filter(w => !wordsA.has(w));
+
+  if (uniqueA.length > 0 && a.content.length < 400 && !a.content.includes('[differs:')) {
+    updateNode(a.id, { content: a.content + ` [differs: ${uniqueA.slice(0, 3).join(', ')}]` });
+  }
+  if (uniqueB.length > 0 && b.content.length < 400 && !b.content.includes('[differs:')) {
+    updateNode(b.id, { content: b.content + ` [differs: ${uniqueB.slice(0, 3).join(', ')}]` });
+  }
+
+  const existing = getEdgeBetween(a.id, b.id);
+  if (!existing) {
+    addEdge(a.id, b.id, 'similar_to', 0.8);
+  }
+}
+
 export function mergeNodes(): MergeResult {
   const db = getDb();
   const result: MergeResult = {
@@ -67,6 +90,18 @@ export function mergeNodes(): MergeResult {
 
     for (let j = i + 1; j < candidates.length && result.nodes_merged < MAX_MERGES_PER_RUN; j++) {
       if (merged.has(candidates[j].id)) continue;
+
+      // Pattern Separation: very similar but different → differentiate, don't merge
+      const embA = getEmbedding(candidates[i].id);
+      const embB = getEmbedding(candidates[j].id);
+      if (embA && embB) {
+        const sim = cosineSimilarity(embA, embB);
+        if (sim > 0.9) {
+          separatePatterns(candidates[i], candidates[j]);
+          merged.add(candidates[j].id);
+          continue;
+        }
+      }
 
       if (isSimilar(candidates[i].content, candidates[j].content)) {
         const { winner, loser } = pickWinner(candidates[i], candidates[j]);

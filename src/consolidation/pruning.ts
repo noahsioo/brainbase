@@ -1,10 +1,12 @@
-import { getDb, type Edge } from '../memory/store.js';
+import { getDb, type Edge, type Node } from '../memory/store.js';
+import { isGarbage } from '../extraction/verification.js';
 
 export interface PruningResult {
   edges_pruned: number;
   orphans_found: number;
   nodes_promoted: number;
   nodes_decayed: number;
+  nodes_deleted: number;
 }
 
 export function pruneGraph(): PruningResult {
@@ -14,6 +16,7 @@ export function pruneGraph(): PruningResult {
     orphans_found: 0,
     nodes_promoted: 0,
     nodes_decayed: 0,
+    nodes_deleted: 0,
   };
 
   // 1. Edge Pruning: weak edges that aren't connected to core nodes
@@ -29,6 +32,21 @@ export function pruneGraph(): PruningResult {
 
   for (const edge of weakEdges) {
     if (coreSet.has(edge.source_id) || coreSet.has(edge.target_id)) continue;
+    db.prepare('DELETE FROM edges WHERE id = ?').run(edge.id);
+    result.edges_pruned++;
+  }
+
+  // 1.5 Dead Edge Pruning: edges not strengthened in 30+ days AND weak
+  const thirtyDaysAgoEdges = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const deadEdges = db.prepare(`
+    SELECT id FROM edges
+    WHERE strength < 0.1
+      AND last_strengthened < ?
+      AND source_id NOT IN (SELECT id FROM nodes WHERE type = 'core')
+      AND target_id NOT IN (SELECT id FROM nodes WHERE type = 'core')
+  `).all(thirtyDaysAgoEdges) as Array<{ id: string }>;
+
+  for (const edge of deadEdges) {
     db.prepare('DELETE FROM edges WHERE id = ?').run(edge.id);
     result.edges_pruned++;
   }
@@ -76,6 +94,34 @@ export function pruneGraph(): PruningResult {
       db.prepare('UPDATE nodes SET importance = ? WHERE id = ?').run(newImportance, node.id);
       result.nodes_decayed++;
     }
+  }
+
+  // 5. Garbage Cleanup: delete nodes matching garbage patterns
+  const PROTECTED_TYPES = new Set(['core', 'entity', 'system_knowledge', 'identity', 'prospective']);
+  const allNodesForGarbage = db.prepare(
+    "SELECT * FROM nodes WHERE type NOT IN ('core', 'entity', 'system_knowledge', 'identity', 'prospective')"
+  ).all() as Node[];
+
+  for (const node of allNodesForGarbage) {
+    if (isGarbage(node.content)) {
+      db.prepare('DELETE FROM nodes WHERE id = ?').run(node.id);
+      result.nodes_deleted++;
+    }
+  }
+
+  // 6. Delete very low importance nodes older than 7 days
+  const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+  const deadNodes = db.prepare(`
+    SELECT id FROM nodes
+    WHERE importance < 0.2
+      AND last_activated < ?
+      AND activation_count < 3
+      AND type NOT IN ('core', 'entity', 'system_knowledge', 'identity', 'prospective')
+  `).all(sevenDaysAgo) as Array<{ id: string }>;
+
+  for (const node of deadNodes) {
+    db.prepare('DELETE FROM nodes WHERE id = ?').run(node.id);
+    result.nodes_deleted++;
   }
 
   return result;

@@ -15,6 +15,7 @@ export const consolidateCommand = new Command('consolidate')
     console.log(`    Orphans found:     ${chalk.yellow(result.orphans_found.toString())}`);
     console.log(`    Nodes promoted:    ${chalk.green(result.nodes_promoted.toString())}`);
     console.log(`    Nodes decayed:     ${chalk.dim(result.nodes_decayed.toString())}`);
+    console.log(`    Nodes deleted:     ${chalk.red(result.nodes_deleted.toString())}`);
 
     console.log(chalk.bold('\n  Merging:'));
     console.log(`    Nodes merged:      ${chalk.cyan(result.nodes_merged.toString())}`);
