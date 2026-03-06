@@ -9,6 +9,16 @@ import { DB_PATH } from '../config.js';
 export interface NodeMetadata {
   category?: string;
   quality?: number;
+  entity_type?: string;
+  aliases?: string[];
+  valence?: number;
+  encoding_context?: {
+    session_topic?: string;
+    mood?: string;
+    provider?: string;
+    message_index?: number;
+  };
+  unique_sessions?: string[];
 }
 
 export interface Node {
@@ -37,6 +47,7 @@ export interface Edge {
   co_activations: number;
   created_at: number;
   last_strengthened: number;
+  metadata: string | null;
 }
 
 export interface Chunk {
@@ -303,6 +314,11 @@ function migrateSchema(db: Database.Database): void {
   if (!hasMetadata) {
     db.exec("ALTER TABLE nodes ADD COLUMN metadata TEXT");
   }
+
+  const edgeCols = db.prepare("PRAGMA table_info(edges)").all() as Array<{ name: string }>;
+  if (!edgeCols.some(c => c.name === 'metadata')) {
+    db.exec("ALTER TABLE edges ADD COLUMN metadata TEXT");
+  }
 }
 
 // ── Node CRUD ───────────────────────────────────────────────
@@ -564,9 +580,10 @@ export function deleteNodesByQuery(query: string): number {
 
 // ── Edge CRUD ───────────────────────────────────────────────
 
-export function addEdge(sourceId: string, targetId: string, type: string, strength = 0.5): Edge {
+export function addEdge(sourceId: string, targetId: string, type: string, strength = 0.5, edgeMeta?: Record<string, unknown>): Edge {
   const db = getDb();
   const now = Date.now();
+  const metaStr = edgeMeta ? JSON.stringify(edgeMeta) : null;
   const edge: Edge = {
     id: randomUUID(),
     source_id: sourceId,
@@ -576,15 +593,16 @@ export function addEdge(sourceId: string, targetId: string, type: string, streng
     co_activations: 0,
     created_at: now,
     last_strengthened: now,
+    metadata: metaStr,
   };
 
   db.prepare(`
     INSERT INTO edges (id, source_id, target_id, strength, type, co_activations,
-      created_at, last_strengthened)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      created_at, last_strengthened, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     edge.id, edge.source_id, edge.target_id, edge.strength, edge.type,
-    edge.co_activations, edge.created_at, edge.last_strengthened,
+    edge.co_activations, edge.created_at, edge.last_strengthened, edge.metadata,
   );
 
   return edge;
@@ -811,6 +829,85 @@ export function deleteMemory(id: string): boolean {
 
 export function deleteMemoriesByQuery(query: string): number {
   return deleteNodesByQuery(query);
+}
+
+// ── Entity Helpers ──────────────────────────────────────────
+
+function normalizedMatch(a: string, b: string): boolean {
+  const cleanA = a.replace(/[-.\s]/g, '').toLowerCase();
+  const cleanB = b.replace(/[-.\s]/g, '').toLowerCase();
+  return cleanA === cleanB;
+}
+
+export function findEntityByName(name: string): Node | null {
+  const db = getDb();
+  const normalized = name.toLowerCase().trim();
+
+  const exact = db.prepare(
+    "SELECT * FROM nodes WHERE type = 'entity' AND LOWER(TRIM(content)) = ?"
+  ).get(normalized) as Node | undefined;
+  if (exact) return exact;
+
+  const withMeta = db.prepare(
+    "SELECT * FROM nodes WHERE type = 'entity' AND metadata IS NOT NULL"
+  ).all() as Node[];
+
+  for (const entity of withMeta) {
+    try {
+      const meta = JSON.parse(entity.metadata!);
+      if (meta.aliases && Array.isArray(meta.aliases)) {
+        if (meta.aliases.some((a: string) => a.toLowerCase() === normalized)) {
+          return entity;
+        }
+      }
+    } catch { continue; }
+  }
+
+  if (normalized.length >= 3 && normalized.length <= 30) {
+    const allEntities = db.prepare(
+      "SELECT * FROM nodes WHERE type = 'entity'"
+    ).all() as Node[];
+
+    for (const entity of allEntities) {
+      if (normalizedMatch(normalized, entity.content)) {
+        return entity;
+      }
+    }
+  }
+
+  return null;
+}
+
+export function getOrCreateEntity(
+  name: string,
+  entityType: string,
+  opts?: { source?: string; importance?: number },
+): Node {
+  const existing = findEntityByName(name);
+  if (existing) {
+    // Reinforce: bump importance slightly on re-mention
+    const newImportance = Math.min(0.95, existing.importance + 0.02);
+    updateNode(existing.id, {
+      importance: newImportance,
+      last_activated: Date.now(),
+      activation_count: (existing.activation_count || 0) + 1,
+    });
+    return existing;
+  }
+
+  return addNode(name.trim(), 'entity', {
+    importance: opts?.importance ?? 0.6,
+    confidence: 0.7,
+    source: opts?.source || 'extraction',
+    metadata: { entity_type: entityType },
+  });
+}
+
+export function getAllEntities(limit = 100): Node[] {
+  const db = getDb();
+  return db.prepare(
+    "SELECT * FROM nodes WHERE type = 'entity' ORDER BY importance DESC, last_activated DESC LIMIT ?"
+  ).all(limit) as Node[];
 }
 
 // ── Embeddings ─────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { getDb, getNodes, getEmbedding, type Node, type NodeMetadata } from './store.js';
+import { getDb, getNodes, getEmbedding, getAllEntities, getEdgesForNode, findEntityByName, getNode, type Node, type NodeMetadata } from './store.js';
 import { getStyleDNA } from '../learning/style-analyzer.js';
 import { getActivatedNodes } from './activation.js';
 import { getSystemState } from './cold-start.js';
@@ -8,49 +8,50 @@ import { buildGhostContext } from './ghost-context.js';
 import { getChunksForContext } from './chunking.js';
 import { getRelevantFailures } from './prospective.js';
 import { cosineSimilarity, getEmbeddingCache } from '../llm/embeddings.js';
+import { getOpenGaps } from '../learning/gap-detector.js';
 
 export type DetailMode = 'MAXIMUM' | 'STANDARD' | 'LIGHT' | 'MINIMAL';
 
 interface ContextBudget {
-  coreIdentity: number;
+  entityProfile: number;
   activeContext: number;
   sessionMomentum: number;
-  communicationStyle: number;
-  warmMemory: number;
+  extras: number;
+  entityGraph: number;
   serendipity: number;
 }
 
 const BUDGETS: Record<DetailMode, ContextBudget> = {
   MAXIMUM: {
-    coreIdentity: 400,
+    entityProfile: 400,
     activeContext: 2400,
     sessionMomentum: 400,
-    communicationStyle: 400,
-    warmMemory: 2000,
+    extras: 400,
+    entityGraph: 2000,
     serendipity: 400,
   },
   STANDARD: {
-    coreIdentity: 200,
+    entityProfile: 200,
     activeContext: 1000,
     sessionMomentum: 200,
-    communicationStyle: 200,
-    warmMemory: 1000,
+    extras: 200,
+    entityGraph: 1000,
     serendipity: 200,
   },
   LIGHT: {
-    coreIdentity: 200,
+    entityProfile: 200,
     activeContext: 400,
     sessionMomentum: 100,
-    communicationStyle: 100,
-    warmMemory: 400,
+    extras: 100,
+    entityGraph: 400,
     serendipity: 100,
   },
   MINIMAL: {
-    coreIdentity: 100,
+    entityProfile: 100,
     activeContext: 150,
     sessionMomentum: 50,
-    communicationStyle: 50,
-    warmMemory: 100,
+    extras: 50,
+    entityGraph: 100,
     serendipity: 50,
   },
 };
@@ -88,8 +89,129 @@ function truncateToTokens(text: string, maxTokens: number): string {
   return text.substring(0, maxChars - 3) + '...';
 }
 
-function buildCoreIdentitySlot(budget: number): string {
-  // First try high importance, then fallback to lower threshold
+// ── Relation Labels ─────────────────────────────────────────
+
+const RELATION_LABELS: Record<string, string> = {
+  builds: 'Baut',
+  uses: 'Nutzt',
+  likes: 'Mag',
+  prefers: 'Bevorzugt',
+  dislikes: 'Mag nicht',
+  knows: 'Kennt',
+  has_skill: 'Kann',
+  works_with: 'Arbeitet mit',
+  wants: 'Will',
+  speaks: 'Spricht',
+  interested_in: 'Interessiert an',
+  member_of: 'Mitglied von',
+  located_at: 'Wohnt in',
+  is_a: 'Ist',
+  part_of: 'Teil von',
+};
+
+// ── Entity Profile (replaces buildCoreIdentitySlot) ─────────
+
+function buildEntityProfileSlot(budget: number): string {
+  const entities = getAllEntities(50);
+
+  if (entities.length === 0) {
+    return buildLegacyCoreSlot(budget);
+  }
+
+  const userEntity = entities.find(e => {
+    if (!e.metadata) return false;
+    try {
+      const meta = JSON.parse(e.metadata) as NodeMetadata;
+      return meta.entity_type === 'person';
+    } catch { return false; }
+  });
+
+  const userName = userEntity?.content || 'User';
+
+  const relationGroups: Record<string, string[]> = {};
+
+  if (userEntity) {
+    const edges = getEdgesForNode(userEntity.id);
+    for (const edge of edges) {
+      const targetId = edge.source_id === userEntity.id ? edge.target_id : edge.source_id;
+      const target = getNode(targetId);
+      if (!target) continue;
+
+      const label = RELATION_LABELS[edge.type] || edge.type;
+      if (!relationGroups[label]) relationGroups[label] = [];
+      if (!relationGroups[label].includes(target.content)) {
+        relationGroups[label].push(target.content);
+      }
+    }
+  }
+
+  let text = `## Ueber ${userName}\n`;
+
+  for (const [label, targets] of Object.entries(relationGroups)) {
+    const line = `- ${label}: ${targets.join(', ')}\n`;
+    if (estimateTokens(text + line) > budget) break;
+    text += line;
+  }
+
+  // Only show legacy nodes if entity profile is empty
+  if (Object.keys(relationGroups).length === 0) {
+    return buildLegacyCoreSlot(budget);
+  }
+
+  // Orphan facts: high-importance facts not covered by entity relations
+  const entityNames = new Set(entities.map(e => e.content.toLowerCase()));
+  const PLACEHOLDER_NAMES = new Set([
+    'User Identity', 'Communication Style', 'Current Project',
+    'Tech Stack', 'Workflow', 'Pain Points', 'Goals', 'Expertise Map',
+  ]);
+
+  const orphanNodes = [
+    ...getNodes({ type: 'fact', minImportance: 0.6, limit: 5 }),
+    ...getNodes({ type: 'preference', minImportance: 0.6, limit: 5 }),
+    ...getNodes({ type: 'decision', minImportance: 0.6, limit: 3 }),
+  ].filter(n =>
+    !PLACEHOLDER_NAMES.has(n.content) &&
+    isDisplayWorthy(n) &&
+    !entityNames.has(n.content.toLowerCase()) &&
+    ![...entityNames].some(name => n.content.toLowerCase().includes(name))
+  );
+
+  for (const node of orphanNodes.slice(0, 3)) {
+    const line = `- ${node.content}\n`;
+    if (estimateTokens(text + line) > budget) break;
+    text += line;
+  }
+
+  // M27: Approach/Avoidance — show entities with strong emotional valence
+  const entitiesWithValence = entities.filter(e => {
+    if (!e.metadata) return false;
+    try {
+      const meta = JSON.parse(e.metadata) as NodeMetadata;
+      return meta.valence && Math.abs(meta.valence as number) > 0.3;
+    } catch { return false; }
+  });
+
+  const positiveEntities = entitiesWithValence
+    .filter(e => { const meta = JSON.parse(e.metadata!) as NodeMetadata; return (meta.valence as number) > 0.3; })
+    .map(e => e.content);
+  const negativeEntities = entitiesWithValence
+    .filter(e => { const meta = JSON.parse(e.metadata!) as NodeMetadata; return (meta.valence as number) < -0.3; })
+    .map(e => e.content);
+
+  if (positiveEntities.length > 0) {
+    const line = `- Staerken: ${positiveEntities.join(', ')}\n`;
+    if (estimateTokens(text + line) <= budget) text += line;
+  }
+  if (negativeEntities.length > 0) {
+    const line = `- Vorsicht bei: ${negativeEntities.join(', ')}\n`;
+    if (estimateTokens(text + line) <= budget) text += line;
+  }
+
+  if (text === `## Ueber ${userName}\n`) return '';
+  return truncateToTokens(text, budget);
+}
+
+function buildLegacyCoreSlot(budget: number): string {
   let coreNodes = getNodes({ type: 'core', minImportance: 0.9, limit: 10 });
   let facts = getNodes({ type: 'fact', minImportance: 0.9, limit: 5 });
   let prefs = getNodes({ type: 'preference', minImportance: 0.9, limit: 3 });
@@ -97,7 +219,6 @@ function buildCoreIdentitySlot(budget: number): string {
   let allCore = [...coreNodes, ...facts, ...prefs];
 
   const PLACEHOLDER_NAMES = ['User Identity', 'Communication Style', 'Current Project', 'Tech Stack', 'Workflow', 'Pain Points', 'Goals', 'Expertise Map'];
-  // Fallback: lower threshold if nothing meaningful found at 0.9
   if (allCore.filter(n => !PLACEHOLDER_NAMES.includes(n.content)).length === 0) {
     coreNodes = getNodes({ type: 'core', minImportance: 0.5, limit: 10 });
     facts = getNodes({ type: 'fact', minImportance: 0.5, limit: 10 });
@@ -108,14 +229,7 @@ function buildCoreIdentitySlot(budget: number): string {
   }
 
   const meaningful = allCore.filter(n =>
-    n.content !== 'User Identity' &&
-    n.content !== 'Communication Style' &&
-    n.content !== 'Current Project' &&
-    n.content !== 'Tech Stack' &&
-    n.content !== 'Workflow' &&
-    n.content !== 'Pain Points' &&
-    n.content !== 'Goals' &&
-    n.content !== 'Expertise Map' &&
+    !PLACEHOLDER_NAMES.includes(n.content) &&
     isDisplayWorthy(n)
   );
 
@@ -131,10 +245,10 @@ function buildCoreIdentitySlot(budget: number): string {
   return truncateToTokens(text, budget);
 }
 
-// Types that always pass through regardless of topic (core identity stuff)
+// ── Session Topic Embedding ─────────────────────────────────
+
 const UNIVERSAL_TYPES = new Set(['core', 'identity', 'preference', 'style_dna']);
 
-// Session topic embedding, set before context generation
 let _sessionTopicVec: Float32Array | null = null;
 
 export function setSessionTopicEmbedding(vector: Float32Array | null): void {
@@ -145,16 +259,13 @@ function isTopicRelevant(node: Node, topic: string | undefined): boolean {
   if (!topic) return true;
   if (UNIVERSAL_TYPES.has(node.type)) return true;
 
-  // Try semantic relevance first
   const nodeVec = getEmbedding(node.id);
   if (nodeVec && _sessionTopicVec) {
     const sim = cosineSimilarity(nodeVec, _sessionTopicVec);
     if (sim > 0.4) return true;
     if (sim < 0.15) return false;
-    // In between: fall through to keyword check
   }
 
-  // Fallback: keyword matching
   const topicLower = topic.toLowerCase();
   const topicWords = topicLower.split(/\s+/).filter(w => w.length > 3);
   const contentLower = node.content.toLowerCase();
@@ -165,10 +276,11 @@ function isTopicRelevant(node: Node, topic: string | undefined): boolean {
   return false;
 }
 
-function buildActiveContextSlot(budget: number, sessionTopic?: string): string {
+// ── Active Context (entities + legacy nodes) ────────────────
+
+function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: string, salience?: string): string {
   const activated = getActivatedNodes(30);
 
-  // Fallback: if no activated nodes, show recent high-importance nodes
   let nodes = activated;
   if (nodes.length === 0) {
     nodes = getNodes({ minImportance: 0.6, limit: 15 });
@@ -176,28 +288,144 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string): string {
 
   if (nodes.length === 0) return '';
 
-  // Session isolation: prioritize topic-relevant nodes, then universal, then others
   if (sessionTopic) {
     const relevant = nodes.filter(n => isTopicRelevant(n, sessionTopic));
     const irrelevant = nodes.filter(n => !isTopicRelevant(n, sessionTopic));
-    // Show relevant first, then fill remaining budget with other nodes
-    nodes = [...relevant, ...irrelevant];
+
+    // M30: Focus mode → only topic-relevant nodes (strict filtering)
+    if (salience === 'focus') {
+      nodes = relevant;
+    } else {
+      nodes = [...relevant, ...irrelevant];
+    }
+  }
+
+  if (nodes.length === 0) return '';
+
+  // M23: Mood-based sorting — frustrated → solutions first, failures last
+  if (mood === 'frustrated') {
+    nodes.sort((a, b) => {
+      const aBoost = a.emotional_tag === 'success' || a.emotional_tag === 'solution' ? 1 : 0;
+      const bBoost = b.emotional_tag === 'success' || b.emotional_tag === 'solution' ? 1 : 0;
+      if (aBoost !== bBoost) return bBoost - aBoost;
+      const aPenalty = a.emotional_tag === 'failure' || a.emotional_tag === 'frustration' ? 1 : 0;
+      const bPenalty = b.emotional_tag === 'failure' || b.emotional_tag === 'frustration' ? 1 : 0;
+      if (aPenalty !== bPenalty) return aPenalty - bPenalty;
+      return (b.activation || 0) - (a.activation || 0);
+    });
   }
 
   let text = '## Aktiver Kontext\n';
   const seen = new Set<string>();
 
-  // Show chunks first (coherent groups)
+  const entityNodes = nodes.filter(n => n.type === 'entity');
+  const nonEntityNodes = nodes.filter(n => n.type !== 'entity');
+
+  // Pass 1: Build entity association map + collect orphans
   const chunks = getChunksForContext(5);
   const chunkedNodeIds = new Set<string>();
 
   for (const chunk of chunks) {
-    // Only show chunks that have at least one activated node
+    const hasActivated = chunk.nodes.some(n => activated.some(a => a.id === n.id));
+    if (!hasActivated && activated.length > 0) continue;
+    for (const n of chunk.nodes) {
+      chunkedNodeIds.add(n.id);
+      seen.add(n.content);
+    }
+  }
+
+  const entityAssociated = new Map<string, string[]>();
+  const orphanFacts: Node[] = [];
+
+  for (const node of nonEntityNodes) {
+    if (chunkedNodeIds.has(node.id)) continue;
+    if (node.type === 'core') continue;
+    if (node.content === 'User Identity' || node.content === 'Communication Style') continue;
+    if (!isDisplayWorthy(node)) continue;
+    if (seen.has(node.content)) continue;
+
+    const contentLower = node.content.toLowerCase();
+    let associated = false;
+
+    for (const entity of entityNodes) {
+      if (contentLower.includes(entity.content.toLowerCase())) {
+        const existing = entityAssociated.get(entity.content) || [];
+        existing.push(node.content);
+        entityAssociated.set(entity.content, existing);
+        associated = true;
+        seen.add(node.content);
+        break;
+      }
+    }
+
+    if (!associated) {
+      orphanFacts.push(node);
+    }
+  }
+
+  // Pass 2: Show entities with connections + associated facts
+  for (const entity of entityNodes) {
+    if (seen.has(entity.content)) continue;
+    seen.add(entity.content);
+
+    let entityType = '';
+    if (entity.metadata) {
+      try {
+        const meta = JSON.parse(entity.metadata) as NodeMetadata;
+        entityType = meta.entity_type || '';
+      } catch { /* skip */ }
+    }
+
+    const edges = getEdgesForNode(entity.id);
+    const connected: string[] = [];
+    for (const edge of edges) {
+      if (connected.length >= 3) break;
+      const otherId = edge.source_id === entity.id ? edge.target_id : edge.source_id;
+      const other = getNode(otherId);
+      if (other && other.type === 'entity' && other.content !== entity.content) {
+        connected.push(other.content);
+      }
+    }
+
+    const connStr = connected.length > 0 ? ` → ${connected.join(', ')}` : '';
+    const typeStr = entityType ? ` (${entityType})` : '';
+    const countStr = entity.activation_count > 5 ? ` [${entity.activation_count}x]` : '';
+
+    // M27: Valence indicator for entities with strong negative somatic markers
+    let valenceHint = '';
+    if (entity.metadata) {
+      try {
+        const meta = JSON.parse(entity.metadata) as NodeMetadata;
+        if (meta.valence && (meta.valence as number) < -0.3) {
+          valenceHint = ' (oft Probleme)';
+        }
+      } catch { /* skip */ }
+    }
+
+    const line = `- **${entity.content}**${typeStr}${valenceHint}${connStr}${countStr}\n`;
+    if (estimateTokens(text + line) > budget) break;
+    text += line;
+
+    const associated = entityAssociated.get(entity.content);
+    if (associated) {
+      for (const fact of associated.slice(0, 2)) {
+        const subLine = `  - ${fact}\n`;
+        if (estimateTokens(text + subLine) > budget) break;
+        text += subLine;
+      }
+    }
+  }
+
+  // Pass 3: Show chunks
+  for (const chunk of chunks) {
     const hasActivated = chunk.nodes.some(n => activated.some(a => a.id === n.id));
     if (!hasActivated && activated.length > 0) continue;
 
+    const nonEntityChunkNodes = chunk.nodes.filter(n => n.type !== 'entity');
+    if (nonEntityChunkNodes.length === 0) continue;
+
     const chunkHeader = `- **${chunk.name}**: `;
-    const chunkContent = chunk.nodes
+    const chunkContent = nonEntityChunkNodes
       .filter(n => isDisplayWorthy(n))
       .map(n => n.content.slice(0, 60))
       .join(' | ');
@@ -207,23 +435,14 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string): string {
     const line = chunkHeader + chunkContent + '\n';
     if (estimateTokens(text + line) > budget) break;
     text += line;
-
-    for (const n of chunk.nodes) {
-      chunkedNodeIds.add(n.id);
-      seen.add(n.content);
-    }
   }
 
-  // Then show individual (non-chunked) nodes
-  for (const node of nodes) {
-    if (chunkedNodeIds.has(node.id)) continue;
-    if (node.type === 'core') continue;
-    if (node.content === 'User Identity' || node.content === 'Communication Style') continue;
-    if (!isDisplayWorthy(node)) continue;
+  // Pass 4: Show orphan facts (no [type] prefix)
+  for (const node of orphanFacts) {
     if (seen.has(node.content)) continue;
     seen.add(node.content);
-    const importance = node.importance >= 0.7 ? '!' : '';
-    const line = `- ${importance}[${node.type}] ${node.content}\n`;
+    const prio = node.importance >= 0.7 ? '! ' : '';
+    const line = `- ${prio}${node.content}\n`;
     if (estimateTokens(text + line) > budget) break;
     text += line;
   }
@@ -232,6 +451,8 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string): string {
 
   return truncateToTokens(text, budget);
 }
+
+// ── Session Momentum (unchanged) ────────────────────────────
 
 function buildSessionMomentumSlot(budget: number): string {
   const db = getDb();
@@ -264,29 +485,79 @@ function buildSessionMomentumSlot(budget: number): string {
   return truncateToTokens(text, budget);
 }
 
-function buildCommunicationStyleSlot(budget: number): string {
-  const commNodes = getNodes({ type: 'preference', limit: 5 });
-  const styleNodes = commNodes.filter(n =>
-    n.content.toLowerCase().includes('kommunikation') ||
-    n.content.toLowerCase().includes('stil') ||
-    n.content.toLowerCase().includes('style') ||
-    n.content.toLowerCase().includes('direkt') ||
-    n.content.toLowerCase().includes('ausfuehrlich')
-  );
+// ── Entity Graph (replaces buildWarmMemorySlot) ─────────────
 
-  if (styleNodes.length === 0) return '';
+function buildEntityGraphSlot(budget: number, topic?: string): string {
+  if (!topic) return '';
 
-  let text = '## Kommunikation\n';
-  for (const node of styleNodes) {
-    text += `- ${node.content}\n`;
+  const topicEntity = findEntityByName(topic);
+
+  if (!topicEntity) {
+    return buildLegacyWarmSlot(budget, topic);
   }
 
+  const edges = getEdgesForNode(topicEntity.id);
+  if (edges.length === 0) return '';
+
+  let text = `## Zum Thema: ${topicEntity.content}\n`;
+
+  // 1-hop neighbors sorted by strength
+  const neighbors: Array<{ node: Node; edge: typeof edges[0] }> = [];
+  for (const edge of edges) {
+    const otherId = edge.source_id === topicEntity.id ? edge.target_id : edge.source_id;
+    const other = getNode(otherId);
+    if (other) neighbors.push({ node: other, edge });
+  }
+
+  neighbors.sort((a, b) => b.edge.strength - a.edge.strength);
+
+  const shownIds = new Set<string>([topicEntity.id]);
+
+  for (const { node, edge } of neighbors) {
+    const relLabel = RELATION_LABELS[edge.type] || edge.type;
+    const strengthStr = edge.strength >= 0.5 ? ` (${edge.strength.toFixed(1)})` : '';
+    const line = `- ${topicEntity.content} → ${relLabel} → ${node.content}${strengthStr}\n`;
+    if (estimateTokens(text + line) > budget) break;
+    text += line;
+    shownIds.add(node.id);
+  }
+
+  // 2-hop for strong entity connections
+  const strongNeighbors = neighbors.filter(n => n.edge.strength > 0.6 && n.node.type === 'entity');
+  for (const { node: neighbor } of strongNeighbors.slice(0, 3)) {
+    const hop2Edges = getEdgesForNode(neighbor.id);
+    for (const edge2 of hop2Edges) {
+      const otherId = edge2.source_id === neighbor.id ? edge2.target_id : edge2.source_id;
+      if (shownIds.has(otherId)) continue;
+      const other = getNode(otherId);
+      if (!other || other.type !== 'entity') continue;
+
+      const relLabel = RELATION_LABELS[edge2.type] || edge2.type;
+      const line = `  - ${neighbor.content} → ${relLabel} → ${other.content}\n`;
+      if (estimateTokens(text + line) > budget) break;
+      text += line;
+      shownIds.add(otherId);
+    }
+  }
+
+  // Topic-related facts (not entity→entity, but mentioning the topic)
+  const topicNameLower = topicEntity.content.toLowerCase();
+  const topicFacts = getNodes({ minImportance: 0.5, limit: 10 })
+    .filter(n => n.type !== 'entity' && n.type !== 'core' &&
+      n.content.toLowerCase().includes(topicNameLower) &&
+      isDisplayWorthy(n));
+
+  for (const fact of topicFacts.slice(0, 3)) {
+    const line = `- ${fact.content}\n`;
+    if (estimateTokens(text + line) > budget) break;
+    text += line;
+  }
+
+  if (text === `## Zum Thema: ${topicEntity.content}\n`) return '';
   return truncateToTokens(text, budget);
 }
 
-function buildWarmMemorySlot(budget: number, topic?: string): string {
-  if (!topic) return '';
-
+function buildLegacyWarmSlot(budget: number, topic: string): string {
   const activated = getActivatedNodes(20);
   const relevant = activated.filter(n => {
     const content = n.content.toLowerCase();
@@ -297,13 +568,15 @@ function buildWarmMemorySlot(budget: number, topic?: string): string {
 
   let text = `## Zum Thema: ${topic}\n`;
   for (const node of relevant) {
-    const line = `- [${node.type}] ${node.content}\n`;
+    const line = `- ${node.content}\n`;
     if (estimateTokens(text + line) > budget) break;
     text += line;
   }
 
   return truncateToTokens(text, budget);
 }
+
+// ── Distilled Profile (unchanged) ───────────────────────────
 
 function buildDistilledProfileSlot(budget: number): string {
   const profile = getSystemState('user_profile_distilled');
@@ -313,11 +586,14 @@ function buildDistilledProfileSlot(budget: number): string {
   return truncateToTokens(text, budget);
 }
 
-function buildSerendipitySlot(budget: number): string {
+// ── Serendipity (unchanged) ─────────────────────────────────
+
+function buildSerendipitySlot(budget: number, mood?: string, salience?: string): string {
   const sessionCount = getSystemState('sessions_count');
   const count = sessionCount ? parseInt(sessionCount, 10) : 0;
 
-  if (count % 20 !== 0 || count === 0) return '';
+  // M23 + M30: Show serendipity when excited OR creative mode
+  if ((count % 20 !== 0 || count === 0) && mood !== 'excited' && salience !== 'creative') return '';
 
   const db = getDb();
   const randomNode = db.prepare(`
@@ -335,6 +611,8 @@ function buildSerendipitySlot(budget: number): string {
     budget,
   );
 }
+
+// ── Task Reminder (unchanged) ───────────────────────────────
 
 function buildTaskReminderSlot(budget: number): string {
   const tasks = getOpenTasks();
@@ -354,13 +632,33 @@ function buildTaskReminderSlot(budget: number): string {
   return truncateToTokens(text, budget);
 }
 
+// ── Ghost Context (unchanged) ───────────────────────────────
+
 function buildGhostContextSlot(budget: number, currentTopic?: string): string {
   if (!currentTopic) return '';
   const ghost = buildGhostContext(currentTopic);
   if (!ghost) return '';
-  const text = `## Expertise-Hinweis\n- ${ghost}\n`;
+
+  let text = `## Expertise-Hinweis\n- ${ghost}\n`;
+
+  // M33: Metacognition — show open knowledge gaps for this topic
+  const gaps = getOpenGaps();
+  const topicLower = currentTopic.toLowerCase();
+  const relevantGaps = gaps.filter(g =>
+    topicLower.includes(g.domain.toLowerCase()) ||
+    g.domain.toLowerCase().includes(topicLower)
+  );
+
+  for (const gap of relevantGaps.slice(0, 2)) {
+    const line = `- Wissensluecke: ${gap.description}\n`;
+    if (estimateTokens(text + line) > budget) break;
+    text += line;
+  }
+
   return truncateToTokens(text, budget);
 }
+
+// ── Failure Warning (unchanged) ─────────────────────────────
 
 function buildFailureWarningSlot(budget: number, topic: string): string {
   const failures = getRelevantFailures(topic);
@@ -376,12 +674,39 @@ function buildFailureWarningSlot(budget: number, topic: string): string {
   return truncateToTokens(text, budget);
 }
 
+// ── Conflict Monitoring (M31) ────────────────────────────────
+
+function buildConflictSlot(budget: number): string {
+  const db = getDb();
+
+  const contradictions = db.prepare(`
+    SELECT n1.content as src, n2.content as tgt
+    FROM edges e
+    JOIN nodes n1 ON e.source_id = n1.id
+    JOIN nodes n2 ON e.target_id = n2.id
+    WHERE e.type = 'contradicts'
+    AND (n1.activation > 0.1 OR n2.activation > 0.1)
+    LIMIT 3
+  `).all() as Array<{ src: string; tgt: string }>;
+
+  if (contradictions.length === 0) return '';
+
+  let text = '## Hinweis: Widersprueche\n';
+  for (const c of contradictions) {
+    const line = `- "${c.src}" vs "${c.tgt}"\n`;
+    if (estimateTokens(text + line) > budget) break;
+    text += line;
+  }
+  return truncateToTokens(text, budget);
+}
+
+// ── Meta Insight (unchanged) ────────────────────────────────
+
 function buildMetaInsightSlot(budget: number): string {
   const profile = getMetaProfile();
 
   const lines: string[] = [];
 
-  // Communication type hint
   if (profile.dominant_type !== 'unknown') {
     const hints: Record<string, string> = {
       pointer: 'User ist ein "Zeiger" - beobachte Verhalten statt auf Erklaerungen zu warten',
@@ -392,7 +717,6 @@ function buildMetaInsightSlot(budget: number): string {
     if (hint) lines.push(hint);
   }
 
-  // Learning profile hints (only if enough data collected)
   const lp = profile.learning_profile;
   if (lp && profile.total_messages_analyzed >= 20) {
     const dominant = [
@@ -422,6 +746,8 @@ function buildMetaInsightSlot(budget: number): string {
   return truncateToTokens(text, budget);
 }
 
+// ── Episodes (unchanged) ────────────────────────────────────
+
 function buildEpisodeSlot(budget: number, topic?: string): string {
   const db = getDb();
   const episodes = db.prepare(
@@ -430,7 +756,6 @@ function buildEpisodeSlot(budget: number, topic?: string): string {
 
   if (episodes.length === 0) return '';
 
-  // If topic given, find relevant episodes
   let relevant = episodes;
   if (topic) {
     const topicLower = topic.toLowerCase();
@@ -442,7 +767,6 @@ function buildEpisodeSlot(budget: number, topic?: string): string {
     if (matched.length > 0) relevant = matched;
   }
 
-  // Show max 2 most relevant episodes
   const toShow = relevant.slice(0, 2);
   let text = '## Fruehere Sessions\n';
   for (const ep of toShow) {
@@ -457,6 +781,8 @@ function buildEpisodeSlot(budget: number, topic?: string): string {
   return truncateToTokens(text, budget);
 }
 
+// ── Style Slot (unchanged) ──────────────────────────────────
+
 function buildStyleSlot(budget: number, topic?: string): string {
   if (!topic) return '';
 
@@ -469,7 +795,6 @@ function buildStyleSlot(budget: number, topic?: string): string {
 
   const topicLower = topic.toLowerCase().replace(/\s+/g, '_');
 
-  // Find style DNA nodes relevant to current topic
   const relevant = styleDnaNodes.filter(n => {
     if (!n.metadata) return false;
     try {
@@ -492,6 +817,8 @@ function buildStyleSlot(budget: number, topic?: string): string {
   return truncateToTokens(text, budget);
 }
 
+// ── Examples Slot (unchanged) ───────────────────────────────
+
 function buildExamplesSlot(budget: number, topic?: string): string {
   if (!topic) return '';
 
@@ -503,16 +830,13 @@ function buildExamplesSlot(budget: number, topic?: string): string {
 
   if (examples.length === 0) return '';
 
-  // Find examples relevant to the topic
   const topicLower = topic.toLowerCase();
   const topicWords = topicLower.split(/\s+/).filter(w => w.length > 3);
 
   const relevant = examples.filter(ex => {
     const contentLower = ex.content.toLowerCase();
-    // Check content match
     if (contentLower.includes(topicLower)) return true;
     if (topicWords.some(w => contentLower.includes(w))) return true;
-    // Check metadata category match
     if (ex.metadata) {
       try {
         const meta = JSON.parse(ex.metadata) as NodeMetadata;
@@ -526,7 +850,6 @@ function buildExamplesSlot(budget: number, topic?: string): string {
   if (relevant.length === 0) return '';
 
   let text = '## Beispiele\n';
-  // Show max 2 examples, full content
   for (const ex of relevant.slice(0, 2)) {
     let label = '';
     if (ex.metadata) {
@@ -544,71 +867,288 @@ function buildExamplesSlot(budget: number, topic?: string): string {
   return truncateToTokens(text, budget);
 }
 
+// ── Tip-of-the-Tongue (M50) ─────────────────────────────────
+
+function buildTipOfTongueSlot(budget: number, sessionTopic?: string): string {
+  const db = getDb();
+  const weakNodes = db.prepare(`
+    SELECT * FROM nodes
+    WHERE activation BETWEEN 0.02 AND 0.15
+    AND type IN ('entity', 'fact', 'preference', 'decision', 'project')
+    AND importance >= 0.5
+    ORDER BY activation DESC LIMIT 5
+  `).all() as Node[];
+
+  if (weakNodes.length === 0) return '';
+
+  let relevant = weakNodes;
+  if (sessionTopic) {
+    const topicLower = sessionTopic.toLowerCase();
+    const topicWords = topicLower.split(/\s+/).filter(w => w.length > 3);
+    relevant = weakNodes.filter(n => {
+      const c = n.content.toLowerCase();
+      return topicWords.some(w => c.includes(w));
+    });
+  }
+
+  if (relevant.length === 0) return '';
+
+  let text = '## Moeglicherweise relevant\n';
+  for (const node of relevant.slice(0, 3)) {
+    const line = `- ${node.content}\n`;
+    if (estimateTokens(text + line) > budget) break;
+    text += line;
+  }
+
+  if (text === '## Moeglicherweise relevant\n') return '';
+  return truncateToTokens(text, budget);
+}
+
+// ── Main Context Generator ──────────────────────────────────
+
 export function generateContext(
   mode: DetailMode = 'STANDARD',
   currentTopic?: string,
+  currentMood?: string,
+  thalamicMode?: 'burst' | 'tonic',
+  salienceMode?: 'focus' | 'creative' | 'default',
 ): string {
-  const budget = BUDGETS[mode];
+  // M24: Burst mode → upgrade LIGHT to STANDARD (more context when signal is strong)
+  const effectiveMode = (thalamicMode === 'burst' && mode === 'LIGHT') ? 'STANDARD' : mode;
+  const budget = BUDGETS[effectiveMode];
   const sections: string[] = [];
 
-  const distilledProfile = buildDistilledProfileSlot(budget.coreIdentity);
+  // M24: Frustrated → failure warnings FIRST and ALWAYS
+  if (currentMood === 'frustrated' && currentTopic) {
+    const failureWarning = buildFailureWarningSlot(budget.extras, currentTopic);
+    if (failureWarning) sections.push(failureWarning);
+  }
+
+  const distilledProfile = buildDistilledProfileSlot(budget.entityProfile);
   if (distilledProfile) sections.push(distilledProfile);
 
-  const coreIdentity = buildCoreIdentitySlot(budget.coreIdentity);
-  if (coreIdentity) sections.push(coreIdentity);
+  const entityProfile = buildEntityProfileSlot(budget.entityProfile);
+  if (entityProfile) sections.push(entityProfile);
 
-  const activeContext = buildActiveContextSlot(budget.activeContext, currentTopic);
+  const activeContext = buildActiveContextSlot(budget.activeContext, currentTopic, currentMood, salienceMode);
   if (activeContext) sections.push(activeContext);
 
   const momentum = buildSessionMomentumSlot(budget.sessionMomentum);
   if (momentum) sections.push(momentum);
 
-  const commStyle = buildCommunicationStyleSlot(budget.communicationStyle);
-  if (commStyle) sections.push(commStyle);
+  const entityGraph = buildEntityGraphSlot(budget.entityGraph, currentTopic);
+  if (entityGraph) sections.push(entityGraph);
 
-  const warmMemory = buildWarmMemorySlot(budget.warmMemory, currentTopic);
-  if (warmMemory) sections.push(warmMemory);
-
-  const serendipity = buildSerendipitySlot(budget.serendipity);
+  const serendipity = buildSerendipitySlot(budget.serendipity, currentMood, salienceMode);
   if (serendipity) sections.push(serendipity);
 
-  if (mode === 'MAXIMUM' || mode === 'STANDARD') {
-    const ghostCtx = buildGhostContextSlot(budget.communicationStyle, currentTopic);
+  if (effectiveMode === 'MAXIMUM' || effectiveMode === 'STANDARD') {
+    const ghostCtx = buildGhostContextSlot(budget.extras, currentTopic);
     if (ghostCtx) sections.unshift(ghostCtx);
 
     const taskReminder = buildTaskReminderSlot(budget.sessionMomentum);
     if (taskReminder) sections.push(taskReminder);
 
-    if (currentTopic) {
-      const failureWarning = buildFailureWarningSlot(budget.communicationStyle, currentTopic);
+    // Failure warning already added at top for frustrated mood — skip duplicate
+    if (currentTopic && currentMood !== 'frustrated') {
+      const failureWarning = buildFailureWarningSlot(budget.extras, currentTopic);
       if (failureWarning) sections.push(failureWarning);
     }
 
-    const metaInsight = buildMetaInsightSlot(budget.communicationStyle);
+    // M31: Conflict Monitoring — show active contradictions
+    const conflicts = buildConflictSlot(budget.extras);
+    if (conflicts) sections.push(conflicts);
+
+    const metaInsight = buildMetaInsightSlot(budget.extras);
     if (metaInsight) sections.push(metaInsight);
 
-    // Episodes: show relevant past session summaries
-    const episodes = buildEpisodeSlot(budget.warmMemory, currentTopic);
+    const episodes = buildEpisodeSlot(budget.entityGraph, currentTopic);
     if (episodes) sections.push(episodes);
 
-    // Style DNA: show style parameters when topic matches
-    const styleDna = buildStyleSlot(budget.communicationStyle, currentTopic);
+    const styleDna = buildStyleSlot(budget.extras, currentTopic);
     if (styleDna) sections.push(styleDna);
 
-    // Examples: show relevant examples when topic matches
-    const exampleBudget = mode === 'MAXIMUM' ? 2000 : 1000;
+    const exampleBudget = effectiveMode === 'MAXIMUM' ? 2000 : 1000;
     const examples = buildExamplesSlot(exampleBudget, currentTopic);
     if (examples) sections.push(examples);
+
+    // M50: Tip-of-the-Tongue — weakly activated but relevant nodes
+    const tot = buildTipOfTongueSlot(budget.extras, currentTopic);
+    if (tot) sections.push(tot);
   }
 
   if (sections.length === 0) {
     return 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.';
   }
 
-  return sections.join('\n');
+  return integrateContext(sections);
 }
 
 export function getContextTokenCount(mode: DetailMode = 'STANDARD'): number {
   const context = generateContext(mode);
   return estimateTokens(context);
+}
+
+// ── Narrative Briefing ──────────────────────────────────────
+
+const MAX_CHUNKS = 7;
+
+function integrateContext(sections: string[]): string {
+  if (sections.length === 0) return '';
+
+  const chunks: string[] = [];
+
+  for (const section of sections) {
+    const narrative = sectionToNarrative(section);
+    if (narrative) chunks.push(narrative);
+  }
+
+  return chunks.slice(0, MAX_CHUNKS).join('\n\n');
+}
+
+function sectionToNarrative(section: string): string | null {
+  const lines = section.split('\n').filter(l => l.trim());
+  if (lines.length === 0) return null;
+
+  const header = lines[0].replace(/^#+\s*/, '').trim();
+  const rest = lines.slice(1);
+
+  const bulletPoints = rest
+    .filter(l => l.trimStart().startsWith('- '))
+    .map(l => l.replace(/^\s*-\s*/, '').trim());
+
+  // Sections with sub-headers (###) like episodes/examples — keep as-is
+  const hasSubHeaders = rest.some(l => l.trimStart().startsWith('### '));
+  if (hasSubHeaders) {
+    return rest.join('\n').trim() || null;
+  }
+
+  if (bulletPoints.length === 0) {
+    return rest.join(' ').trim() || null;
+  }
+
+  if (header.startsWith('Ueber ') || header.startsWith('User Profile')) {
+    return buildIdentityNarrative(header, bulletPoints);
+  }
+  if (header === 'Aktiver Kontext') {
+    return buildActiveNarrative(bulletPoints);
+  }
+  if (header.startsWith('Zum Thema:')) {
+    return buildGraphNarrative(header, bulletPoints);
+  }
+  if (header === 'Letzte Session') {
+    return buildSessionNarrative(bulletPoints);
+  }
+  if (header === 'Offene Aufgaben') {
+    return buildTaskNarrative(bulletPoints);
+  }
+  if (header === 'Vorsicht') {
+    return buildWarningNarrative(bulletPoints);
+  }
+  if (header === 'Erinnerung') {
+    return 'Erinnerung: ' + bulletPoints.join('. ') + '.';
+  }
+  if (header.startsWith('Hinweis: Widersprueche')) {
+    return 'Achtung, Widerspruch: ' + bulletPoints.join('. ') + '. Klaere welche Info aktuell ist.';
+  }
+  if (header === 'Moeglicherweise relevant') {
+    return 'Vielleicht auch relevant: ' + bulletPoints.join(', ') + '.';
+  }
+
+  return bulletPoints.join('. ') + '.';
+}
+
+function buildIdentityNarrative(header: string, points: string[]): string {
+  const name = header.replace('Ueber ', '').replace('User Profile', '').trim() || 'der User';
+  const sentences: string[] = [`Du sprichst mit ${name}.`];
+
+  for (const point of points) {
+    const colonIdx = point.indexOf(':');
+    if (colonIdx > 0) {
+      const label = point.substring(0, colonIdx).trim();
+      const value = point.substring(colonIdx + 1).trim();
+      const verb = label.charAt(0).toLowerCase() + label.slice(1);
+      sentences.push(`${name} ${verb} ${value}.`);
+    } else {
+      sentences.push(point.endsWith('.') ? point : point + '.');
+    }
+  }
+
+  return sentences.join(' ');
+}
+
+function buildActiveNarrative(points: string[]): string {
+  if (points.length === 0) return '';
+  const parts: string[] = [];
+
+  for (const point of points) {
+    // Entity format: **Name** (type) -> connected
+    const entityMatch = point.match(/^\*\*(.+?)\*\*(.*)$/);
+    if (entityMatch) {
+      const name = entityMatch[1];
+      const extra = entityMatch[2].trim();
+      if (extra.includes('\u2192')) {
+        const connected = extra.replace(/^.*?\u2192\s*/, '').trim();
+        parts.push(`${name} (verbunden mit ${connected})`);
+      } else {
+        parts.push(name + (extra ? ' ' + extra : ''));
+      }
+    } else {
+      const cleaned = point.replace(/^!*\[.*?\]\s*/, '').trim();
+      parts.push(cleaned);
+    }
+  }
+
+  return 'Aktuell relevant: ' + parts.join('. ') + '.';
+}
+
+function buildGraphNarrative(header: string, points: string[]): string {
+  const topic = header.replace('Zum Thema:', '').trim();
+  const relations: string[] = [];
+
+  for (const point of points) {
+    const parts = point.split('\u2192').map(p => p.trim());
+    if (parts.length >= 3) {
+      const rel = parts[1].toLowerCase();
+      const target = parts[2].replace(/\s*\([\d.]+\)\s*$/, '').trim();
+      relations.push(`${rel} ${target}`);
+    } else {
+      relations.push(point);
+    }
+  }
+
+  if (relations.length === 0) return '';
+  return `Zum Thema ${topic}: ${relations.join(', ')}.`;
+}
+
+function buildSessionNarrative(points: string[]): string {
+  let mood = '';
+  let productivity = '';
+  let topics = '';
+
+  for (const point of points) {
+    if (point.startsWith('Stimmung:')) mood = point.replace('Stimmung:', '').trim();
+    else if (point.startsWith('Produktivitaet:')) productivity = point.replace('Produktivitaet:', '').trim();
+    else if (point.startsWith('Themen:')) topics = point.replace('Themen:', '').trim();
+  }
+
+  const parts: string[] = ['Letzte Session'];
+  if (mood) parts.push(`war ${mood}`);
+  if (productivity) parts.push(`und ${productivity === 'hoch' ? 'produktiv' : productivity === 'niedrig' ? 'wenig produktiv' : 'mittelmaessig produktiv'}`);
+  let sentence = parts.join(' ') + '.';
+  if (topics) sentence += ` Themen: ${topics}.`;
+  return sentence;
+}
+
+function buildTaskNarrative(points: string[]): string {
+  const tasks = points.map(p => {
+    if (p.startsWith('!!')) return p.slice(2).trim() + ' (hohe Prioritaet)';
+    if (p.startsWith('!')) return p.slice(1).trim() + ' (Prioritaet)';
+    return p;
+  });
+  return 'Offene Aufgaben: ' + tasks.join(', ') + '.';
+}
+
+function buildWarningNarrative(points: string[]): string {
+  return 'Vorsicht: ' + points.join('. ') + '.';
 }
