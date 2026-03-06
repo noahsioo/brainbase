@@ -18,6 +18,7 @@ import { snapshotCommand } from './commands/snapshot.js';
 import { mcpCommand } from './commands/mcp.js';
 import { dashboardCommand } from './commands/dashboard.js';
 import { siteCommand } from './commands/site.js';
+import { embedCommand } from './commands/embed.js';
 
 const program = new Command();
 
@@ -43,5 +44,6 @@ program.addCommand(snapshotCommand);
 program.addCommand(mcpCommand);
 program.addCommand(dashboardCommand);
 program.addCommand(siteCommand);
+program.addCommand(embedCommand);
 
 program.parse();

@@ -6,7 +6,7 @@ import type { LLMClient } from '../llm/types.js';
 import { getLLMClient } from '../llm/factory.js';
 import { startSelfHealing, stopSelfHealing } from './self-heal.js';
 import { createSession, endSession } from '../memory/store.js';
-import { runConsolidation } from '../consolidation/consolidation-runner.js';
+import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { PriorityQueue } from './queue.js';
 import { dispatchUserPrompt, dispatchSessionEnd, resetDispatcherState } from './dispatcher.js';
 import type { KeywordFlags } from '../signal/keywords.js';
@@ -15,6 +15,11 @@ const PORT = 7899;
 let server: Server | null = null;
 let client: LLMClient | null = null;
 let queue: PriorityQueue | null = null;
+let paused = false;
+let startedAt = Date.now();
+let messagesProcessed = 0;
+let nodesCreated = 0;
+let lastExtractionAt: string | null = null;
 
 function log(msg: string): void {
   const timestamp = new Date().toISOString();
@@ -37,6 +42,10 @@ async function handleEvent(event: string, data: Record<string, unknown>): Promis
     return { error: 'LLM client not initialized' };
   }
 
+  if (paused) {
+    return { status: 'paused' };
+  }
+
   switch (event) {
     case 'session-start': {
       const sessionId = (data.session_id as string) || `session-${Date.now()}`;
@@ -52,9 +61,14 @@ async function handleEvent(event: string, data: Record<string, unknown>): Promis
       const signalFlags = data.signal_flags as KeywordFlags | undefined;
       const recentMessages = data._recentMessages as string | undefined;
 
+      messagesProcessed++;
       const result = await dispatchUserPrompt(
         client, queue, prompt, sessionId, signalFlags, recentMessages,
       );
+
+      if (result.ok) {
+        lastExtractionAt = new Date().toISOString();
+      }
 
       return result;
     }
@@ -124,8 +138,49 @@ export async function startDaemon(): Promise<void> {
   log('Priority queue initialized');
 
   server = createServer(async (req, res) => {
+    const corsHeaders: Record<string, string> = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    };
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, corsHeaders);
+      res.end();
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
+      res.end(JSON.stringify({
+        status: paused ? 'paused' : 'ok',
+        model: client?.getModel() || 'unknown',
+        uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
+        messages_processed: messagesProcessed,
+        nodes_created: nodesCreated,
+        last_extraction: lastExtractionAt,
+      }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/pause') {
+      paused = true;
+      log('Watcher paused by user');
+      res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
+      res.end(JSON.stringify({ status: 'paused' }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/resume') {
+      paused = false;
+      log('Watcher resumed by user');
+      res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+
     if (req.method !== 'POST') {
-      res.writeHead(404);
+      res.writeHead(404, corsHeaders);
       res.end();
       return;
     }
@@ -137,11 +192,11 @@ export async function startDaemon(): Promise<void> {
         const { event, data } = JSON.parse(body);
         const result = await handleEvent(event, data || {});
 
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
         res.end(JSON.stringify(result));
       } catch (err) {
         log(`Error handling request: ${err}`);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.writeHead(500, { 'Content-Type': 'application/json', ...corsHeaders });
         res.end(JSON.stringify({ error: String(err) }));
       }
     });
@@ -149,9 +204,25 @@ export async function startDaemon(): Promise<void> {
 
   server.listen(PORT, '127.0.0.1', () => {
     writeFileSync(PID_PATH, String(process.pid));
+    startedAt = Date.now();
     log(`Watcher daemon started on port ${PORT} (PID: ${process.pid})`);
     console.log(`Watcher daemon started (PID: ${process.pid}, port: ${PORT}, model: ${model})`);
   });
+
+  // Active Consolidation: check every hour, run if 12h+ since last
+  const CONSOLIDATION_INTERVAL = 12 * 60 * 60 * 1000;
+  setInterval(async () => {
+    try {
+      const lastConsolidation = getLastConsolidation();
+      if (Date.now() - lastConsolidation > CONSOLIDATION_INTERVAL) {
+        log('Auto-consolidation triggered (12h interval)');
+        const result = await runConsolidation(client ?? undefined);
+        log(`Auto-consolidation done: ${result.nodes_merged} merged, ${result.edges_pruned} pruned, ${result.dream_edges} dreamed`);
+      }
+    } catch (err) {
+      log(`Auto-consolidation failed: ${err}`);
+    }
+  }, 60 * 60 * 1000);
 
   process.on('SIGTERM', () => shutdown());
   process.on('SIGINT', () => shutdown());

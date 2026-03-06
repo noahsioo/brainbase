@@ -26,7 +26,7 @@ function send(response: JsonRpcResponse): void {
   process.stdout.write(json + '\n');
 }
 
-function handleRequest(req: JsonRpcRequest): void {
+async function handleRequest(req: JsonRpcRequest): Promise<void> {
   switch (req.method) {
     case 'initialize':
       send({
@@ -63,7 +63,7 @@ function handleRequest(req: JsonRpcRequest): void {
       const toolName = params.name as string;
       const toolArgs = (params.arguments || {}) as Record<string, unknown>;
 
-      const result = handleToolCall(toolName, toolArgs);
+      const result = await handleToolCall(toolName, toolArgs);
 
       send({
         jsonrpc: '2.0',

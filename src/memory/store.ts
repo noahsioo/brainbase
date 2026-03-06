@@ -6,6 +6,11 @@ import { DB_PATH } from '../config.js';
 
 // ── Interfaces ──────────────────────────────────────────────
 
+export interface NodeMetadata {
+  category?: string;
+  quality?: number;
+}
+
 export interface Node {
   id: string;
   content: string;
@@ -20,6 +25,7 @@ export interface Node {
   last_activated: number;
   chunk_id: string | null;
   abstraction_level: number;
+  metadata: string | null;
 }
 
 export interface Edge {
@@ -271,6 +277,14 @@ function initSchema(db: Database.Database): void {
       promoted INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS embeddings (
+      node_id TEXT PRIMARY KEY,
+      vector BLOB NOT NULL,
+      model TEXT DEFAULT 'text-embedding-3-small',
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_raw_buffer_processed ON raw_buffer(processed);
     CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider);
     CREATE INDEX IF NOT EXISTS idx_signal_counters_count ON signal_counters(count);
@@ -284,6 +298,10 @@ function migrateSchema(db: Database.Database): void {
   const hasAbstractionLevel = columns.some(c => c.name === 'abstraction_level');
   if (!hasAbstractionLevel) {
     db.exec("ALTER TABLE nodes ADD COLUMN abstraction_level INTEGER DEFAULT 0");
+  }
+  const hasMetadata = columns.some(c => c.name === 'metadata');
+  if (!hasMetadata) {
+    db.exec("ALTER TABLE nodes ADD COLUMN metadata TEXT");
   }
 }
 
@@ -299,10 +317,12 @@ export function addNode(
     source?: string;
     chunk_id?: string;
     abstraction_level?: number;
+    metadata?: NodeMetadata;
   },
 ): Node {
   const db = getDb();
   const now = Date.now();
+  const metadataStr = opts?.metadata ? JSON.stringify(opts.metadata) : null;
   const node: Node = {
     id: randomUUID(),
     content,
@@ -317,16 +337,18 @@ export function addNode(
     last_activated: now,
     chunk_id: opts?.chunk_id ?? null,
     abstraction_level: opts?.abstraction_level ?? 0,
+    metadata: metadataStr,
   };
 
   db.prepare(`
     INSERT INTO nodes (id, content, type, importance, activation, confidence,
-      activation_count, emotional_tag, source, created_at, last_activated, chunk_id, abstraction_level)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      activation_count, emotional_tag, source, created_at, last_activated, chunk_id, abstraction_level, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     node.id, node.content, node.type, node.importance, node.activation,
     node.confidence, node.activation_count, node.emotional_tag, node.source,
     node.created_at, node.last_activated, node.chunk_id, node.abstraction_level,
+    node.metadata,
   );
 
   return node;
@@ -365,7 +387,7 @@ export function getNodes(opts?: {
   return db.prepare(query).all(...params) as Node[];
 }
 
-export function updateNode(id: string, updates: Partial<Pick<Node, 'content' | 'type' | 'importance' | 'activation' | 'confidence' | 'emotional_tag' | 'chunk_id' | 'activation_count' | 'last_activated' | 'abstraction_level'>>): void {
+export function updateNode(id: string, updates: Partial<Pick<Node, 'content' | 'type' | 'importance' | 'activation' | 'confidence' | 'emotional_tag' | 'chunk_id' | 'activation_count' | 'last_activated' | 'abstraction_level' | 'metadata'>>): void {
   const db = getDb();
   const fields: string[] = [];
   const params: unknown[] = [];
@@ -379,6 +401,11 @@ export function updateNode(id: string, updates: Partial<Pick<Node, 'content' | '
 
   params.push(id);
   db.prepare(`UPDATE nodes SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+
+  // Invalidate embedding if content changed (will be re-embedded by queue)
+  if (updates.content !== undefined) {
+    db.prepare('DELETE FROM embeddings WHERE node_id = ?').run(id);
+  }
 }
 
 export function deleteNode(id: string): boolean {
@@ -387,15 +414,145 @@ export function deleteNode(id: string): boolean {
   return result.changes > 0;
 }
 
+const SEARCH_STOPWORDS = new Set([
+  'der', 'die', 'das', 'ein', 'eine', 'ist', 'und', 'oder', 'mit',
+  'von', 'zu', 'in', 'auf', 'an', 'den', 'dem', 'des',
+  'ich', 'du', 'er', 'sie', 'es', 'wir', 'ihr',
+  'nicht', 'kein', 'aber', 'auch', 'noch', 'schon', 'nur',
+  'the', 'a', 'an', 'is', 'and', 'or', 'with', 'of', 'to', 'in',
+  'on', 'for', 'at', 'by', 'it', 'he', 'she', 'we', 'you', 'they',
+  'not', 'no', 'but', 'also', 'just', 'only', 'if', 'then', 'so',
+  'have', 'has', 'had', 'was', 'were', 'can', 'will', 'would', 'should',
+  'do', 'does', 'did', 'this', 'that', 'my', 'your', 'his', 'her',
+  'wie', 'was', 'wo', 'wer', 'wann', 'hab', 'hat', 'bin', 'sind',
+  'mal', 'halt', 'lass', 'bitte', 'ja', 'nein', 'ok', 'okay',
+]);
+
 export function searchNodes(query: string, limit = 20): Node[] {
   const db = getDb();
-  const pattern = `%${query}%`;
-  return db.prepare(`
-    SELECT * FROM nodes
-    WHERE content LIKE ?
-    ORDER BY importance DESC, last_activated DESC
-    LIMIT ?
-  `).all(pattern, limit) as Node[];
+
+  // Try semantic search first if embeddings available
+  const semanticResults = semanticSearch(query, limit);
+  if (semanticResults) return semanticResults;
+
+  // Fallback: keyword search
+  return keywordSearchNodes(query, limit);
+}
+
+function keywordSearchNodes(query: string, limit: number): Node[] {
+  const db = getDb();
+  const words = query.toLowerCase()
+    .split(/\s+/)
+    .filter(w => w.length > 2)
+    .filter(w => !SEARCH_STOPWORDS.has(w));
+
+  if (words.length === 0) {
+    return db.prepare(`
+      SELECT * FROM nodes WHERE content LIKE ?
+      ORDER BY importance DESC, last_activated DESC LIMIT ?
+    `).all(`%${query}%`, limit) as Node[];
+  }
+
+  const scores = new Map<string, { node: Node; matchCount: number }>();
+
+  for (const word of words) {
+    const hits = db.prepare('SELECT * FROM nodes WHERE LOWER(content) LIKE ?')
+      .all(`%${word}%`) as Node[];
+    for (const hit of hits) {
+      const existing = scores.get(hit.id);
+      if (existing) {
+        existing.matchCount++;
+      } else {
+        scores.set(hit.id, { node: hit, matchCount: 1 });
+      }
+    }
+  }
+
+  return Array.from(scores.values())
+    .sort((a, b) => {
+      if (b.matchCount !== a.matchCount) return b.matchCount - a.matchCount;
+      return b.node.importance - a.node.importance;
+    })
+    .slice(0, limit)
+    .map(s => s.node);
+}
+
+// ── Semantic Search ────────────────────────────────────────
+
+let _queryEmbeddingCache: Map<string, Float32Array> = new Map();
+
+export function setQueryEmbedding(query: string, vector: Float32Array): void {
+  _queryEmbeddingCache.set(query.toLowerCase().trim(), vector);
+  if (_queryEmbeddingCache.size > 50) {
+    const firstKey = _queryEmbeddingCache.keys().next().value;
+    if (firstKey) _queryEmbeddingCache.delete(firstKey);
+  }
+}
+
+export function clearQueryEmbeddingCache(): void {
+  _queryEmbeddingCache.clear();
+}
+
+function semanticSearch(query: string, limit: number): Node[] | null {
+  const queryKey = query.toLowerCase().trim();
+  const queryVec = _queryEmbeddingCache.get(queryKey);
+  if (!queryVec) return null;
+
+  const allEmbeddings = getAllEmbeddings();
+  if (allEmbeddings.length === 0) return null;
+
+  const db = getDb();
+
+  // Compute cosine similarity for all embedded nodes
+  const scored: Array<{ node_id: string; similarity: number }> = [];
+  for (const emb of allEmbeddings) {
+    let dot = 0, normA = 0, normB = 0;
+    for (let i = 0; i < queryVec.length; i++) {
+      dot += queryVec[i] * emb.vector[i];
+      normA += queryVec[i] * queryVec[i];
+      normB += emb.vector[i] * emb.vector[i];
+    }
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    const sim = denom === 0 ? 0 : dot / denom;
+    if (sim > 0.15) {
+      scored.push({ node_id: emb.node_id, similarity: sim });
+    }
+  }
+
+  // Also get keyword hits for hybrid scoring
+  const keywordHits = new Set<string>();
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !SEARCH_STOPWORDS.has(w));
+  for (const word of words) {
+    const hits = db.prepare('SELECT id FROM nodes WHERE LOWER(content) LIKE ?')
+      .all(`%${word}%`) as Array<{ id: string }>;
+    for (const h of hits) keywordHits.add(h.id);
+  }
+
+  // Hybrid score: 0.7 * semantic + 0.3 * keyword
+  const finalScores = scored.map(s => ({
+    node_id: s.node_id,
+    score: 0.7 * s.similarity + (keywordHits.has(s.node_id) ? 0.3 : 0),
+  }));
+
+  // Add keyword-only hits that weren't in semantic results
+  for (const kid of keywordHits) {
+    if (!finalScores.some(f => f.node_id === kid)) {
+      finalScores.push({ node_id: kid, score: 0.3 });
+    }
+  }
+
+  finalScores.sort((a, b) => b.score - a.score);
+  const topIds = finalScores.slice(0, limit).map(f => f.node_id);
+
+  if (topIds.length === 0) return null;
+
+  const nodes: Node[] = [];
+  for (const id of topIds) {
+    const node = db.prepare('SELECT * FROM nodes WHERE id = ?').get(id) as Node | undefined;
+    if (node) nodes.push(node);
+  }
+
+  return nodes;
 }
 
 export function deleteNodesByQuery(query: string): number {
@@ -654,4 +811,53 @@ export function deleteMemory(id: string): boolean {
 
 export function deleteMemoriesByQuery(query: string): number {
   return deleteNodesByQuery(query);
+}
+
+// ── Embeddings ─────────────────────────────────────────────
+
+export function saveEmbedding(nodeId: string, vector: Float32Array): void {
+  const db = getDb();
+  const buffer = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+  db.prepare(`
+    INSERT OR REPLACE INTO embeddings (node_id, vector, created_at)
+    VALUES (?, ?, ?)
+  `).run(nodeId, buffer, Date.now());
+}
+
+export function getEmbedding(nodeId: string): Float32Array | null {
+  const db = getDb();
+  const row = db.prepare('SELECT vector FROM embeddings WHERE node_id = ?').get(nodeId) as { vector: Buffer } | undefined;
+  if (!row) return null;
+  return new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
+}
+
+export function getAllEmbeddings(): Array<{ node_id: string; vector: Float32Array }> {
+  const db = getDb();
+  const rows = db.prepare('SELECT node_id, vector FROM embeddings').all() as Array<{ node_id: string; vector: Buffer }>;
+  return rows.map(r => ({
+    node_id: r.node_id,
+    vector: new Float32Array(r.vector.buffer, r.vector.byteOffset, r.vector.byteLength / 4),
+  }));
+}
+
+export function deleteEmbedding(nodeId: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM embeddings WHERE node_id = ?').run(nodeId);
+}
+
+export function getEmbeddingCount(): { embedded: number; total: number } {
+  const db = getDb();
+  const embedded = (db.prepare('SELECT COUNT(*) as c FROM embeddings').get() as { c: number }).c;
+  const total = (db.prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number }).c;
+  return { embedded, total };
+}
+
+export function getNodesWithoutEmbeddings(limit = 50): Node[] {
+  const db = getDb();
+  return db.prepare(`
+    SELECT n.* FROM nodes n
+    LEFT JOIN embeddings e ON n.id = e.node_id
+    WHERE e.node_id IS NULL
+    LIMIT ?
+  `).all(limit) as Node[];
 }

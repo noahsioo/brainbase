@@ -151,7 +151,7 @@ export const dashboardCommand = new Command('dashboard')
         return;
       }
 
-      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
       res.end(html);
     });
 

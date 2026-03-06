@@ -1,5 +1,16 @@
 import { getSystemState, setSystemState } from '../memory/cold-start.js';
 
+export interface LearningProfile {
+  learns_by_examples: number;
+  learns_by_doing: number;
+  learns_by_explanation: number;
+  learns_by_vision: number;
+  prefers_direct: number;
+  prefers_detailed: number;
+  frustration_threshold: number;
+  context_switch_speed: number;
+}
+
 export interface MetaProfile {
   explicit_score: number;
   corrector_score: number;
@@ -11,6 +22,7 @@ export interface MetaProfile {
     listen_explicit: number;
     track_corrections: number;
   };
+  learning_profile: LearningProfile;
 }
 
 export interface MetaResult {
@@ -36,6 +48,19 @@ const CORRECTOR_PATTERNS = [
   /\b(stopp|stop|halt|warte|wait)\b/i,
 ];
 
+function getDefaultLearningProfile(): LearningProfile {
+  return {
+    learns_by_examples: 0.5,
+    learns_by_doing: 0.5,
+    learns_by_explanation: 0.5,
+    learns_by_vision: 0.5,
+    prefers_direct: 0.5,
+    prefers_detailed: 0.5,
+    frustration_threshold: 0.5,
+    context_switch_speed: 0.5,
+  };
+}
+
 function getDefaultProfile(): MetaProfile {
   return {
     explicit_score: 0,
@@ -48,6 +73,7 @@ function getDefaultProfile(): MetaProfile {
       listen_explicit: 0.34,
       track_corrections: 0.33,
     },
+    learning_profile: getDefaultLearningProfile(),
   };
 }
 
@@ -97,8 +123,82 @@ function calculateWeights(profile: MetaProfile): MetaProfile['learning_weights']
   }
 }
 
+// Learning profile detection patterns
+const EXAMPLE_PATTERNS = [
+  /\b(beispiel|example|z\.?b\.?|e\.?g\.?|for instance|zum beispiel|so wie|like this)\b/i,
+  /\b(zeig mir|show me|lass.*sehen|let me see)\b/i,
+];
+const EXPLANATION_PATTERNS = [
+  /\b(warum|why|wieso|weshalb|erklaer|explain|wie funktioniert|how does)\b/i,
+  /\b(was ist|what is|was bedeutet|what does.*mean)\b/i,
+];
+const VISION_PATTERNS = [
+  /\b(vision|revolution|zukunft|future|stell dir vor|imagine|big picture|ueberleg|denk mal)\b/i,
+  /\b(crazy|krass|geil|mega|riesig|huge|massive|game.?chang)\b/i,
+];
+const DOING_PATTERNS = [
+  /\b(mach|just do|einfach|lass.*machen|let'?s.*build|bau|code|implement)\b/i,
+  /\b(weiter|continue|next|naechst|go ahead)\b/i,
+];
+const FRUSTRATION_INDICATORS = [
+  /\b(scheisse|shit|fuck|damn|verdammt|nerv|frustri|annoying|broken|kaputt)\b/i,
+];
+
+const LEARNING_RATE = 0.02;
+
+function clamp(val: number): number {
+  return Math.max(0, Math.min(1, val));
+}
+
+function updateLearningProfile(lp: LearningProfile, text: string): void {
+  const words = text.trim().split(/\s+/);
+  const wordCount = words.length;
+
+  // Example-based learning
+  for (const p of EXAMPLE_PATTERNS) {
+    if (p.test(text)) { lp.learns_by_examples = clamp(lp.learns_by_examples + LEARNING_RATE); break; }
+  }
+
+  // Learning by doing
+  for (const p of DOING_PATTERNS) {
+    if (p.test(text)) { lp.learns_by_doing = clamp(lp.learns_by_doing + LEARNING_RATE); break; }
+  }
+
+  // Learning by explanation
+  for (const p of EXPLANATION_PATTERNS) {
+    if (p.test(text)) { lp.learns_by_explanation = clamp(lp.learns_by_explanation + LEARNING_RATE); break; }
+  }
+
+  // Vision-based thinking
+  for (const p of VISION_PATTERNS) {
+    if (p.test(text)) { lp.learns_by_vision = clamp(lp.learns_by_vision + LEARNING_RATE); break; }
+  }
+
+  // Direct vs detailed preference (based on message length)
+  if (wordCount < 15) {
+    lp.prefers_direct = clamp(lp.prefers_direct + LEARNING_RATE);
+    lp.prefers_detailed = clamp(lp.prefers_detailed - LEARNING_RATE * 0.5);
+  } else if (wordCount > 80) {
+    lp.prefers_detailed = clamp(lp.prefers_detailed + LEARNING_RATE);
+    lp.prefers_direct = clamp(lp.prefers_direct - LEARNING_RATE * 0.5);
+  }
+
+  // Frustration threshold
+  for (const p of FRUSTRATION_INDICATORS) {
+    if (p.test(text)) {
+      lp.frustration_threshold = clamp(lp.frustration_threshold - LEARNING_RATE);
+      break;
+    }
+  }
+}
+
 export function updateMetaProfile(text: string): MetaResult {
   const profile = loadProfile();
+
+  // Ensure learning_profile exists (migration from old profiles)
+  if (!profile.learning_profile) {
+    profile.learning_profile = getDefaultLearningProfile();
+  }
 
   const words = text.trim().split(/\s+/);
   const isShortCommand = words.length < 20;
@@ -124,6 +224,9 @@ export function updateMetaProfile(text: string): MetaResult {
   if (isShortCommand && !hasExplicit && !hasCorrector) {
     profile.pointer_score++;
   }
+
+  // Update learning profile from behavior
+  updateLearningProfile(profile.learning_profile, text);
 
   profile.total_messages_analyzed++;
   profile.dominant_type = determineDominantType(profile);

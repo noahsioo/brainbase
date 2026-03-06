@@ -74,7 +74,7 @@ export function hasMemoryBlock(filePath: string): boolean {
 }
 
 export function updateAllProviderFiles(providers?: ProviderName[]): void {
-  const targets = providers || (['claude-code', 'gemini', 'openclaw'] as ProviderName[]);
+  const targets = providers || (['gemini', 'openclaw'] as ProviderName[]);
 
   for (const provider of targets) {
     const paths = PROVIDER_PATHS[provider];

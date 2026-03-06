@@ -7,6 +7,9 @@ import { dreamPhase, type DreamResult } from './dreamer.js';
 import { distillKnowledge, type DistillResult } from './distiller.js';
 import { updateHotMemoryInDb, updateAllProviderFiles } from '../memory/hot.js';
 import { detectKnowledgeGaps } from '../learning/gap-detector.js';
+import { detectAndCreateChunks } from '../memory/chunking.js';
+import { runClusterStrengthening } from '../learning/cluster-tracker.js';
+import { analyzeAllCategories } from '../learning/style-analyzer.js';
 import type { LLMClient } from '../llm/types.js';
 
 export interface ConsolidationResult {
@@ -21,6 +24,8 @@ export interface ConsolidationResult {
   contradictions: number;
   clusters_distilled: number;
   global_profile_updated: boolean;
+  chunks_created: number;
+  nodes_chunked: number;
   duration_ms: number;
 }
 
@@ -62,6 +67,14 @@ export async function runConsolidation(client?: LLMClient): Promise<Consolidatio
   // 2. Merging
   const merge: MergeResult = mergeNodes();
 
+  // 2.5 Chunking (group co-activated nodes)
+  let chunking = { chunks_created: 0, nodes_chunked: 0 };
+  try {
+    chunking = detectAndCreateChunks();
+  } catch {
+    // non-fatal
+  }
+
   // 3. Abstraction Building
   const abstraction: AbstractionResult = buildAbstractions();
 
@@ -94,6 +107,21 @@ export async function runConsolidation(client?: LLMClient): Promise<Consolidatio
     // non-fatal
   }
 
+  // 6.5 Cluster strengthening (boost frequently co-occurring topic clusters)
+  let clusterResult = { clusters_found: 0, edges_strengthened: 0 };
+  try {
+    clusterResult = runClusterStrengthening();
+  } catch {
+    // non-fatal
+  }
+
+  // 6.6 Style DNA analysis (re-analyze all example categories)
+  try {
+    analyzeAllCategories();
+  } catch {
+    // non-fatal
+  }
+
   // 7. Snapshot
   try {
     createSnapshot();
@@ -120,6 +148,8 @@ export async function runConsolidation(client?: LLMClient): Promise<Consolidatio
     contradictions: dream.contradictions,
     clusters_distilled: distill.clusters_distilled,
     global_profile_updated: distill.global_updated,
+    chunks_created: chunking.chunks_created,
+    nodes_chunked: chunking.nodes_chunked,
     duration_ms: Date.now() - start,
   };
 }

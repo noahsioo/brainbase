@@ -6,7 +6,7 @@ import { extractFromPrompt } from '../extraction/code-extractor.js';
 import { calculateSignalStrength, GATE_HEBBIAN } from '../signal/signal-strength.js';
 import { activateByQuery } from '../memory/activation.js';
 import { extractEntities, updateCounters, checkAutoNodeCreation } from '../signal/counters.js';
-import { updateAllProviderFiles } from '../memory/hot.js';
+
 
 interface SessionEndInput {
   session_id?: string;
@@ -41,18 +41,20 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
       parseTranscriptLocally(input.session_id);
     }
 
-    // Always update provider files at session end
-    updateAllProviderFiles();
-
     // Auto-consolidation: run if last consolidation was 24h+ ago
-    // No OllamaClient passed → only DB consolidation (no dream/distill)
     const lastConsolidation = getLastConsolidation();
     if (Date.now() - lastConsolidation > TWENTY_FOUR_HOURS) {
-      setTimeout(() => {
-        runConsolidation().catch(() => {
-          // Silent - consolidation should never break session end
+      if (config.watcher_engine !== 'none' && config.watcher_engine !== 'session') {
+        // Daemon has LLM client → delegate for dream+distill phases
+        sendToWatcher('consolidate', {}).catch(() => {
+          // Fallback: local consolidation without LLM
+          runConsolidation().catch(() => {});
         });
-      }, 100);
+      } else {
+        setTimeout(() => {
+          runConsolidation().catch(() => {});
+        }, 100);
+      }
     }
   } catch {
     // Silent fail - session end should never break anything
@@ -68,7 +70,8 @@ function parseTranscriptLocally(sessionId: string): void {
 
     if (messages.length === 0) return;
 
-    // Run regex extraction + entity counting on each message
+    const entityCounts = new Map<string, number>();
+
     for (const msg of messages) {
       const signal = calculateSignalStrength(msg.content, sessionId);
       extractFromPrompt(msg.content, sessionId, signal.flags);
@@ -77,10 +80,29 @@ function parseTranscriptLocally(sessionId: string): void {
         activateByQuery(msg.content);
       }
 
-      // Feed entity counters from the full transcript
       const entities = extractEntities(msg.content);
       const counters = updateCounters(entities, sessionId);
       checkAutoNodeCreation(counters);
+
+      // Collect entity frequencies for topic extraction
+      for (const entity of entities) {
+        entityCounts.set(entity, (entityCounts.get(entity) || 0) + 1);
+      }
+    }
+
+    // Save top entities as session topics
+    const topEntities = Array.from(entityCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([entity]) => entity);
+
+    if (topEntities.length > 0) {
+      try {
+        const row = db.prepare('SELECT topics FROM sessions WHERE id = ?').get(sessionId) as { topics: string } | undefined;
+        const existing: string[] = row ? JSON.parse(row.topics) : [];
+        const merged = [...new Set([...existing, ...topEntities])];
+        db.prepare('UPDATE sessions SET topics = ? WHERE id = ?').run(JSON.stringify(merged), sessionId);
+      } catch { /* silent */ }
     }
   } catch {
     // Silent - transcript parsing should never break session end

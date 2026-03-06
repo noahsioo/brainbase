@@ -8,16 +8,19 @@ import {
   addEdge,
   strengthenEdge,
   weakenEdge,
+  getEmbedding,
   type Node,
   type Edge,
 } from './store.js';
 import { getCurrentMood } from '../signal/echo.js';
+import { boostCoActivatedCluster } from '../learning/cluster-tracker.js';
+import { getEmbeddingCache, cosineSimilarity } from '../llm/embeddings.js';
 
 const SPREAD_FACTOR = 0.5;
 const DECAY_RATE = 0.85;
 const MIN_ACTIVATION = 0.01;
 const MAX_DEPTH = 3;
-const AUTO_LINK_THRESHOLD = 1;
+const AUTO_LINK_THRESHOLD = 3;
 const ACTIVATION_BUDGET = 50;
 const INHIBITION_TOP_N = 20;
 const RECENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -69,9 +72,11 @@ export function activateNode(nodeId: string, energy = 1.0): ActivationResult {
 
   const totalEnergy = Math.min(1.0, energy + boost);
 
+  const newActivationCount = (node.activation_count || 0) + 1;
+
   updateNode(nodeId, {
     activation: totalEnergy,
-    activation_count: (node.activation_count || 0) + 1,
+    activation_count: newActivationCount,
     last_activated: now,
   });
 
@@ -79,7 +84,10 @@ export function activateNode(nodeId: string, energy = 1.0): ActivationResult {
   const touchedEdges: Edge[] = [];
 
   const updatedNode = getNode(nodeId);
-  if (updatedNode) activatedNodes.set(nodeId, updatedNode);
+  if (updatedNode) {
+    activatedNodes.set(nodeId, updatedNode);
+    reconsolidate(updatedNode);
+  }
 
   if (node.chunk_id) {
     expandChunk(node.chunk_id, totalEnergy * 0.3, activatedNodes);
@@ -225,26 +233,74 @@ function applyCompetitiveInhibition(activatedNodes: Map<string, Node>): number {
   return inhibitedCount;
 }
 
-const ENRICH_MAX_CONTENT = 500;
-const ENRICH_MIN_ACTIVATIONS = 2;
+// ── Reconsolidation ──────────────────────────────────────────
 
-export function enrichNodeFromContext(node: Node, queryContext: string): boolean {
-  if (node.activation_count < ENRICH_MIN_ACTIVATIONS) return false;
-  if (node.content.length >= ENRICH_MAX_CONTENT) return false;
+const RECONSOLIDATION_THRESHOLDS = [3, 7, 15, 30, 60];
+const IMPORTANCE_BOOST_PER_RECON = 0.03;
+const MAX_IMPORTANCE_RECON = 0.95;
+const CONFIDENCE_BOOST_PER_RECON = 0.02;
+const MAX_CONFIDENCE_RECON = 1.0;
+const ENRICH_MAX_CONTENT = 400;
 
-  const nodeWords = extractWords(node.content);
-  const queryWords = extractWords(queryContext);
+const TECH_KEYWORDS = new Set([
+  'react', 'vue', 'angular', 'svelte', 'next', 'nuxt', 'typescript', 'javascript',
+  'python', 'rust', 'go', 'java', 'swift', 'kotlin', 'flutter', 'dart',
+  'node', 'deno', 'bun', 'docker', 'kubernetes', 'aws', 'gcp', 'azure',
+  'postgres', 'mysql', 'redis', 'mongodb', 'sqlite', 'supabase', 'firebase',
+  'tailwind', 'css', 'html', 'api', 'rest', 'graphql', 'grpc', 'websocket',
+  'git', 'github', 'vercel', 'netlify', 'vite', 'webpack', 'eslint', 'jest',
+  'testing', 'deploy', 'ci/cd', 'linux', 'macos', 'ios', 'android',
+]);
 
-  const newTerms: string[] = [];
-  for (const w of queryWords) {
-    if (!nodeWords.has(w) && w.length > 2) {
-      newTerms.push(w);
-    }
+export function reconsolidate(node: Node, queryContext?: string): boolean {
+  if (node.type === 'core' || node.type === 'system_knowledge') return false;
+  if (!RECONSOLIDATION_THRESHOLDS.includes(node.activation_count)) return false;
+
+  const updates: Partial<Pick<Node, 'importance' | 'confidence'>> = {};
+
+  const newImportance = Math.min(MAX_IMPORTANCE_RECON, node.importance + IMPORTANCE_BOOST_PER_RECON);
+  if (newImportance > node.importance) {
+    updates.importance = newImportance;
   }
 
-  if (newTerms.length === 0 || newTerms.length > 5) return false;
+  const newConfidence = Math.min(MAX_CONFIDENCE_RECON, node.confidence + CONFIDENCE_BOOST_PER_RECON);
+  if (newConfidence > node.confidence) {
+    updates.confidence = newConfidence;
+  }
 
-  const addition = ` (${newTerms.join(', ')})`;
+  if (Object.keys(updates).length > 0) {
+    updateNode(node.id, updates);
+  }
+
+  // enrichNodeFromContext disabled: it appended random words to node content
+  // e.g. "jetzt (+ Also, Prinzip, Fick)" - makes nodes worse, not better
+
+  return true;
+}
+
+export function enrichNodeFromContext(node: Node, queryContext: string): boolean {
+  if (node.type === 'core' || node.type === 'system_knowledge') return false;
+  if (node.activation_count < 3) return false;
+  if (node.content.length >= ENRICH_MAX_CONTENT) return false;
+
+  const nodeWordsLower = new Set(node.content.toLowerCase().split(/\s+/));
+  const contextTokens = queryContext.split(/\s+/).filter(w => w.length > 3);
+
+  const enrichments: string[] = [];
+  for (const token of contextTokens) {
+    const lower = token.toLowerCase().replace(/[^a-z0-9/]/g, '');
+    if (nodeWordsLower.has(lower)) continue;
+    if (/^[A-Z]/.test(token) || TECH_KEYWORDS.has(lower)) {
+      if (!enrichments.includes(lower)) {
+        enrichments.push(token.replace(/[^a-zA-Z0-9._/-]/g, ''));
+      }
+    }
+    if (enrichments.length >= 3) break;
+  }
+
+  if (enrichments.length === 0) return false;
+
+  const addition = ` (+ ${enrichments.join(', ')})`;
   if (node.content.length + addition.length > ENRICH_MAX_CONTENT) return false;
 
   updateNode(node.id, { content: node.content + addition });
@@ -271,8 +327,14 @@ export function activateByQuery(query: string, energy = 1.0): ActivationResult {
 
     const freshHit = getNode(hit.id);
     if (freshHit) {
-      enrichNodeFromContext(freshHit, query);
+      reconsolidate(freshHit, query);
     }
+  }
+
+  // Cluster boost: co-activated nodes in clusters get stronger connections
+  const activatedIds = Array.from(allActivated.keys());
+  if (activatedIds.length >= 2) {
+    boostCoActivatedCluster(activatedIds.slice(0, 15));
   }
 
   const budgeted = Array.from(allActivated.values())
@@ -289,13 +351,24 @@ export function activateByQuery(query: string, energy = 1.0): ActivationResult {
 export function decayAllActivations(): number {
   const db = getDb();
   const activeNodes = db.prepare(
-    'SELECT id, activation FROM nodes WHERE activation > 0',
-  ).all() as Array<{ id: string; activation: number }>;
+    'SELECT id, activation, activation_count FROM nodes WHERE activation > 0',
+  ).all() as Array<{ id: string; activation: number; activation_count: number }>;
 
   let affected = 0;
 
   for (const row of activeNodes) {
-    const decayed = row.activation * DECAY_RATE;
+    // Decay resistance: frequently activated nodes decay slower
+    // activation_count 0-2: normal decay (0.85)
+    // activation_count 3-14: slow decay (0.90)
+    // activation_count 15+: very slow decay (0.94)
+    let effectiveDecay = DECAY_RATE;
+    if (row.activation_count >= 15) {
+      effectiveDecay = 0.94;
+    } else if (row.activation_count >= 3) {
+      effectiveDecay = 0.90;
+    }
+
+    const decayed = row.activation * effectiveDecay;
     if (decayed < MIN_ACTIVATION) {
       updateNode(row.id, { activation: 0 });
     } else {
@@ -379,21 +452,33 @@ export function detectEdgeType(sourceContent: string, targetContent: string): Ed
   return 'related_to';
 }
 
+const AUTO_LINK_MAX_EDGES = 10;
+const SEMANTIC_LINK_THRESHOLD = 0.35;
+
 export function autoLinkNodes(nodeId: string): Edge[] {
   const node = getNode(nodeId);
   if (!node) return [];
 
+  if (node.type === 'auto_topic') return [];
+
+  // Try semantic auto-linking first
+  const semanticEdges = semanticAutoLink(nodeId, node);
+  if (semanticEdges) return semanticEdges;
+
+  // Fallback: keyword-based auto-linking
   const nodeWords = extractWords(node.content);
   if (nodeWords.size === 0) return [];
 
   const db = getDb();
   const allNodes = db.prepare(
-    'SELECT * FROM nodes WHERE id != ? LIMIT 200',
-  ).all(nodeId) as Node[];
+    'SELECT * FROM nodes WHERE id != ? AND importance >= 0.5 AND type != ? LIMIT 50',
+  ).all(nodeId, 'auto_topic') as Node[];
 
   const createdEdges: Edge[] = [];
 
   for (const other of allNodes) {
+    if (createdEdges.length >= AUTO_LINK_MAX_EDGES) break;
+
     const existing = getEdgeBetween(nodeId, other.id);
     if (existing) continue;
 
@@ -409,6 +494,46 @@ export function autoLinkNodes(nodeId: string): Edge[] {
       const edge = addEdge(nodeId, other.id, edgeType, strength);
       createdEdges.push(edge);
     }
+  }
+
+  return createdEdges;
+}
+
+function semanticAutoLink(nodeId: string, node: Node): Edge[] | null {
+  const nodeVec = getEmbedding(nodeId);
+  if (!nodeVec) return null;
+
+  const cache = getEmbeddingCache();
+  if (cache.size < 2) return null;
+
+  const createdEdges: Edge[] = [];
+
+  // Find semantically similar nodes
+  const similarities: Array<{ id: string; sim: number }> = [];
+  for (const [otherId, otherVec] of cache) {
+    if (otherId === nodeId) continue;
+    const sim = cosineSimilarity(nodeVec, otherVec);
+    if (sim >= SEMANTIC_LINK_THRESHOLD) {
+      similarities.push({ id: otherId, sim });
+    }
+  }
+
+  similarities.sort((a, b) => b.sim - a.sim);
+
+  for (const match of similarities.slice(0, AUTO_LINK_MAX_EDGES)) {
+    if (createdEdges.length >= AUTO_LINK_MAX_EDGES) break;
+
+    const existing = getEdgeBetween(nodeId, match.id);
+    if (existing) continue;
+
+    const other = getNode(match.id);
+    if (!other || other.type === 'auto_topic') continue;
+
+    // Strength from similarity: capped at 0.7 for auto-links
+    const strength = Math.min(0.7, match.sim * 0.5);
+    const edgeType = match.sim > 0.8 ? 'similar_to' : detectEdgeType(node.content, other.content);
+    const edge = addEdge(nodeId, match.id, edgeType, strength);
+    createdEdges.push(edge);
   }
 
   return createdEdges;

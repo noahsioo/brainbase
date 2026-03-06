@@ -8,6 +8,30 @@ const DEFAULT_MODELS: Record<string, string> = {
   groq: 'llama-3.3-70b-versatile',
   mistral: 'mistral-small-latest',
   openrouter: 'meta-llama/llama-3.3-70b-instruct',
+  xai: 'grok-3-mini',
+  together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+  deepseek: 'deepseek-chat',
+  huggingface: 'meta-llama/Llama-3.3-70B-Instruct',
+  chutes: 'deepseek-ai/DeepSeek-V3-0324',
+  volcengine: 'doubao-1.5-pro-32k',
+  byteplus: 'doubao-1.5-pro-32k',
+  minimax: 'MiniMax-M1',
+  moonshot: 'moonshot-v1-auto',
+  qwen: 'qwen-plus',
+  cerebras: 'llama-3.3-70b',
+  nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
+  venice: 'llama-3.3-70b',
+  litellm: 'gpt-4o-mini',
+  cloudflare: 'gpt-4o-mini',
+  kilocode: 'meta-llama/llama-3.3-70b-instruct',
+  qianfan: 'ernie-4.0-8k',
+  'vercel-ai': 'gpt-4o-mini',
+  synthetic: 'claude-haiku-4-5-20251001',
+  xiaomi: 'MiLM-1',
+  vllm: 'default',
+  zai: 'glm-4-flash',
+  copilot: 'gpt-4o-mini',
+  'opencode-zen': 'gpt-4o-mini',
   custom: 'gpt-4o-mini',
 };
 
@@ -17,6 +41,29 @@ const BASE_URLS: Record<string, string> = {
   mistral: 'https://api.mistral.ai/v1',
   openrouter: 'https://openrouter.ai/api/v1',
   google: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  xai: 'https://api.x.ai/v1',
+  together: 'https://api.together.xyz/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  huggingface: 'https://router.huggingface.co/v1',
+  chutes: 'https://llm.chutes.ai/v1',
+  volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
+  byteplus: 'https://ark.byteplus.com/api/v3',
+  minimax: 'https://api.minimax.chat/v1',
+  moonshot: 'https://api.moonshot.cn/v1',
+  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  cerebras: 'https://api.cerebras.ai/v1',
+  nvidia: 'https://integrate.api.nvidia.com/v1',
+  venice: 'https://api.venice.ai/api/v1',
+  litellm: 'http://localhost:4000/v1',
+  kilocode: 'https://openrouter.ai/api/v1',
+  qianfan: 'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop',
+  'vercel-ai': 'https://gateway.ai.vercel.app/v1',
+  synthetic: 'https://api.synthetic.com/v1',
+  xiaomi: 'https://api.ai.xiaomi.com/v1',
+  vllm: 'http://127.0.0.1:8000/v1',
+  zai: 'https://api.z.ai/v1',
+  copilot: 'http://127.0.0.1:4141/v1',
+  'opencode-zen': 'https://opencode.ai/zen/v1',
 };
 
 export class CloudClient implements LLMClient {
@@ -27,13 +74,17 @@ export class CloudClient implements LLMClient {
   private isAnthropic: boolean;
 
   constructor(config: CloudConfig, model?: string, baseUrl?: string) {
-    this.apiKey = config.api_key || '';
+    if (config.auth_method === 'env_var' && config.env_var_name) {
+      this.apiKey = process.env[config.env_var_name] || '';
+    } else {
+      this.apiKey = config.api_key || '';
+    }
     this.provider = config.provider;
-    this.isAnthropic = config.provider === 'anthropic';
+    this.isAnthropic = config.api_style === 'anthropic' || (config.provider === 'anthropic' && config.api_style !== 'openai');
     this.model = model || DEFAULT_MODELS[config.provider] || 'gpt-4o-mini';
-    this.baseUrl = baseUrl || BASE_URLS[config.provider] || '';
+    this.baseUrl = baseUrl || config.base_url || BASE_URLS[config.provider] || '';
 
-    if (this.isAnthropic) {
+    if (this.isAnthropic && !config.base_url && !baseUrl) {
       this.baseUrl = 'https://api.anthropic.com';
     }
   }
@@ -58,7 +109,23 @@ export class CloudClient implements LLMClient {
         headers: { Authorization: `Bearer ${this.apiKey}` },
         signal: AbortSignal.timeout(10000),
       });
-      return res.ok;
+      if (res.ok) return true;
+
+      // Fallback: minimal chat completion (some providers lack /models)
+      const chatRes = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 5,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      return chatRes.ok || chatRes.status === 400;
     } catch {
       return false;
     }

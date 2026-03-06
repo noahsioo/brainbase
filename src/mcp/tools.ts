@@ -1,6 +1,8 @@
 import { searchNodes, addNode, getStats, type Node } from '../memory/store.js';
 import { activateByQuery, getActivatedNodes, autoLinkNodes } from '../memory/activation.js';
 import { generateContext, type DetailMode } from '../memory/context-generator.js';
+import { processMessage } from '../hooks/user-prompt.js';
+import { createProspectiveMemory } from '../memory/prospective.js';
 
 export interface ToolDefinition {
   name: string;
@@ -117,6 +119,52 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ['query'],
     },
   },
+  {
+    name: 'memory_remind',
+    description:
+      'Create a prospective memory - a reminder that triggers when certain keywords appear in future conversations. ' +
+      'Use this when the user says "remind me about X when Y" or wants to remember something for a future context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: {
+          type: 'string',
+          description: 'What to remember / the reminder content',
+        },
+        trigger_words: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Keywords that trigger this reminder (when any appear in a message)',
+        },
+      },
+      required: ['content', 'trigger_words'],
+    },
+  },
+  {
+    name: 'memory_process_message',
+    description:
+      'Process a user message through the brain. Call this with every user message to feed the brain ' +
+      'and get relevant context back. This enables the brain to learn from conversations in any AI tool. ' +
+      'Returns context that should be used to inform your responses.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        message: {
+          type: 'string',
+          description: 'The user message to process',
+        },
+        provider: {
+          type: 'string',
+          description: 'Which AI tool is calling (cursor, windsurf, continue-dev, claude-desktop, etc.)',
+        },
+        session_id: {
+          type: 'string',
+          description: 'Optional session identifier for grouping messages',
+        },
+      },
+      required: ['message'],
+    },
+  },
 ];
 
 function formatNode(node: Node): string {
@@ -127,7 +175,7 @@ function formatNode(node: Node): string {
   return `${imp}[${node.type}] ${node.content} (${ageLabel}, importance: ${node.importance.toFixed(1)})`;
 }
 
-export function handleToolCall(name: string, args: Record<string, unknown>): ToolResult {
+export async function handleToolCall(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   try {
     switch (name) {
       case 'memory_search':
@@ -140,6 +188,10 @@ export function handleToolCall(name: string, args: Record<string, unknown>): Too
         return handleStatus();
       case 'memory_related':
         return handleRelated(args);
+      case 'memory_remind':
+        return handleRemind(args);
+      case 'memory_process_message':
+        return await handleProcessMessage(args);
       default:
         return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -228,4 +280,42 @@ function handleRelated(args: Record<string, unknown>): ToolResult {
   const lines = activated.map(formatNode);
   const text = `${activated.length} related memories for "${query}" (via spreading activation):\n\n${lines.join('\n')}`;
   return { content: [{ type: 'text', text }] };
+}
+
+function handleRemind(args: Record<string, unknown>): ToolResult {
+  const content = args.content as string;
+  const triggerWords = args.trigger_words as string[];
+
+  if (!content || !triggerWords || triggerWords.length === 0) {
+    return { content: [{ type: 'text', text: 'Error: content and trigger_words are required' }], isError: true };
+  }
+
+  const node = createProspectiveMemory(content, triggerWords);
+  const text = `Reminder set (id: ${node.id.slice(0, 8)}). ` +
+    `Triggers: ${triggerWords.join(', ')}. ` +
+    `Will surface when any trigger word appears in a message.`;
+  return { content: [{ type: 'text', text }] };
+}
+
+async function handleProcessMessage(args: Record<string, unknown>): Promise<ToolResult> {
+  const message = args.message as string;
+  if (!message) {
+    return { content: [{ type: 'text', text: 'Error: message is required' }], isError: true };
+  }
+
+  const provider = (args.provider as string) || 'mcp';
+  const sessionId = (args.session_id as string) || undefined;
+
+  const result = await processMessage({
+    message,
+    provider,
+    session_id: sessionId,
+  });
+
+  if (result.context) {
+    const text = `[Signal: ${result.signal_score.toFixed(2)} / ${result.signal_action}]\n\n${result.context}`;
+    return { content: [{ type: 'text', text }] };
+  }
+
+  return { content: [{ type: 'text', text: `Message processed. Signal: ${result.signal_score.toFixed(2)} / ${result.signal_action}. No relevant context yet.` }] };
 }

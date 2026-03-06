@@ -3,15 +3,17 @@ import { join } from 'path';
 import { LOGS_DIR } from '../config.js';
 import { PriorityQueue } from './queue.js';
 import type { LLMClient } from '../llm/types.js';
-import { extractFromMessage, extractFromTranscript } from './extractor.js';
+import { extractFromMessage, extractFromTranscript, extractEpisode } from './extractor.js';
 import { detectTopicChange } from './topic-detector.js';
 import { detectFrustration, shouldBlockMemoryWrite } from './shield.js';
 import { extractTasks, hasTaskSignal, type TaskExtractionResult } from './task-watcher.js';
 import { extractTacitPatterns } from '../tacit/tacit-tracker.js';
 import { updateMetaProfile } from '../tacit/meta-learner.js';
-import { updateAllProviderFiles, updateHotMemoryInDb } from '../memory/hot.js';
+import { updateHotMemoryInDb } from '../memory/hot.js';
 import { getWarmMemoryForTopic } from '../memory/warm.js';
+import { getDb } from '../memory/store.js';
 import type { KeywordFlags } from '../signal/keywords.js';
+import { detectAndStoreExample } from '../extraction/example-detector.js';
 
 export interface WatcherResult {
   memory: { nodes_created: number } | null;
@@ -24,11 +26,17 @@ export interface WatcherResult {
 interface DispatcherState {
   currentTopic: string;
   messageCount: number;
+  topicDepth: number;
+  focusStartedAt: number;
+  recentTopics: string[];
 }
 
 const state: DispatcherState = {
   currentTopic: '',
   messageCount: 0,
+  topicDepth: 0,
+  focusStartedAt: Date.now(),
+  recentTopics: [],
 };
 
 function log(msg: string): void {
@@ -48,6 +56,9 @@ function log(msg: string): void {
 export function resetDispatcherState(): void {
   state.currentTopic = '';
   state.messageCount = 0;
+  state.topicDepth = 0;
+  state.focusStartedAt = Date.now();
+  state.recentTopics = [];
 }
 
 export async function dispatchUserPrompt(
@@ -87,8 +98,26 @@ export async function dispatchUserPrompt(
   ).then(topicResult => {
     result.topic = topicResult;
     if (topicResult.changed && topicResult.confidence > 0.6) {
+      if (state.currentTopic) {
+        state.recentTopics = [state.currentTopic, ...state.recentTopics].slice(0, 5);
+      }
       state.currentTopic = topicResult.newTopic;
+      state.topicDepth = 0;
+      state.focusStartedAt = Date.now();
       log(`Topic changed to: ${state.currentTopic}`);
+
+      // Persist topic to sessions table
+      try {
+        const db = getDb();
+        const row = db.prepare('SELECT topics FROM sessions WHERE id = ?').get(sessionId) as { topics: string } | undefined;
+        const topics: string[] = row ? JSON.parse(row.topics) : [];
+        if (!topics.includes(topicResult.newTopic)) {
+          topics.push(topicResult.newTopic);
+          db.prepare('UPDATE sessions SET topics = ? WHERE id = ?').run(JSON.stringify(topics), sessionId);
+        }
+      } catch { /* silent */ }
+    } else {
+      state.topicDepth++;
     }
   }).catch(err => {
     log(`topic-detector failed: ${err}`);
@@ -110,8 +139,14 @@ export async function dispatchUserPrompt(
     promises.push(taskPromise);
   }
 
-  // Memory Watcher: periodic extraction every 30 messages
-  if (state.messageCount % 30 === 0 && recentMessages) {
+  // Example Detector: code-based, no LLM needed, runs instantly
+  const example = detectAndStoreExample(prompt, sessionId);
+  if (example) {
+    log(`Example detected (${example.category}): ${example.content.slice(0, 60)}...`);
+  }
+
+  // Memory Watcher: extract from every message (LLM is the Hippocampus)
+  if (recentMessages) {
     const memPromise = queue.enqueue('high', 'memory-watcher', () =>
       extractFromMessage(client, recentMessages, sessionId, signalFlags)
     ).then(nodes => {
@@ -119,7 +154,6 @@ export async function dispatchUserPrompt(
       if (nodes.length > 0) {
         log(`Extracted ${nodes.length} nodes mid-session`);
         updateHotMemoryInDb();
-        updateAllProviderFiles();
       }
     }).catch(err => {
       log(`memory-watcher failed: ${err}`);
@@ -172,8 +206,7 @@ export async function dispatchSessionEnd(
       log(`Extracted ${nodes.length} nodes from session`);
       if (nodes.length > 0) {
         updateHotMemoryInDb();
-        updateAllProviderFiles();
-        log('Hot memory and provider files updated');
+        log('Hot memory updated');
       }
     } catch (err) {
       log(`memory-watcher-end failed: ${err}`);
@@ -189,6 +222,20 @@ export async function dispatchSessionEnd(
   }
 
   if (transcriptText) {
+    // Episode extraction: summarize the session as a diary-like entry
+    const episodePromise = queue.enqueue('high', 'episode-watcher', () =>
+      extractEpisode(client, transcriptText, sessionId)
+    );
+
+    try {
+      const episode = await episodePromise;
+      if (episode) {
+        log(`Episode created: ${episode.content.slice(0, 80)}...`);
+      }
+    } catch (err) {
+      log(`episode-watcher failed: ${err}`);
+    }
+
     // Tacit extraction via queue
     const tacitPromise = queue.enqueue('medium', 'tacit-watcher', () =>
       extractTacitPatterns(client, transcriptText)

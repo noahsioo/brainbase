@@ -2,8 +2,9 @@ import type { Node } from '../memory/store.js';
 
 export interface ExtractedFact {
   content: string;
-  type: 'preference' | 'fact' | 'decision' | 'task' | 'project' | 'learning';
+  type: 'preference' | 'fact' | 'decision' | 'task' | 'project' | 'learning' | 'identity' | 'insight' | 'example';
   confidence: number;
+  metadata?: { category?: string; quality?: number };
 }
 
 export interface ExtractionResponse {
@@ -117,6 +118,19 @@ export function verifyExtraction(
 
   for (const fact of response.new_facts) {
     if (!fact.content || fact.content.length < 3) continue;
+
+    // Examples: allow longer content, skip duplicate detection
+    if (fact.type === 'example') {
+      if (fact.content.length > 2000) continue;
+      const confidence = Math.min(0.8, Math.max(0, fact.confidence));
+      result.new_facts.push({
+        content: fact.content,
+        type: 'example',
+        confidence,
+        metadata: fact.metadata,
+      });
+      continue;
+    }
 
     let content = fact.content;
     if (EMOTIONAL_ABSOLUTES.test(content)) {

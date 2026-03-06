@@ -10,7 +10,7 @@ export interface EntityCounter {
   co_entities: Record<string, number>;
 }
 
-const AUTO_NODE_THRESHOLD = 5;
+const AUTO_NODE_THRESHOLD = 10;
 
 const STOP_WORDS = new Set([
   'der', 'die', 'das', 'ein', 'eine', 'ist', 'und', 'oder', 'mit',
@@ -28,6 +28,10 @@ const STOP_WORDS = new Set([
   'be', 'been', 'being', 'am', 'are', 'get', 'got', 'let', 'make',
   'mach', 'mal', 'halt', 'lass', 'bitte', 'ja', 'nein', 'ok', 'okay',
   'please', 'yes', 'yeah', 'yep', 'nope',
+  'mhm', 'ähm', 'äh', 'hmm', 'also', 'ding', 'sozusagen', 'eigentlich',
+  'einfach', 'bisschen', 'vielleicht', 'genau', 'quasi', 'irgendwie',
+  'like', 'actually', 'basically', 'stuff', 'thing', 'things',
+  'really', 'very', 'quite', 'gonna', 'wanna', 'kinda',
 ]);
 
 export function extractEntities(text: string): string[] {
@@ -128,12 +132,17 @@ export function updateCounters(entities: string[], sessionId: string): EntityCou
 }
 
 export function checkAutoNodeCreation(counters: EntityCounter[]): number {
+  // Disabled: auto_topic created garbage nodes from filler words ("jetzt", "wirklich", "machen")
+  // Counter tracking still runs for signal-strength, but no nodes are created
+  return 0;
+
   let nodesCreated = 0;
 
   for (const counter of counters) {
     if (counter.count === AUTO_NODE_THRESHOLD) {
+      if (counter.entity.length < 4 || STOP_WORDS.has(counter.entity)) continue;
       const node = addNode(
-        `Recurring topic: ${counter.entity}`,
+        counter.entity,
         'auto_topic',
         {
           importance: 0.6,

@@ -58,6 +58,29 @@ export const PROVIDER_PATHS = {
 
 export type ProviderName = keyof typeof PROVIDER_PATHS;
 
+export const MCP_CONFIG_PATHS: Record<string, { file: string; format: 'mcpServers' | 'continue' }> = {
+  'claude-code': {
+    file: join(homedir(), '.claude', 'settings.json'),
+    format: 'mcpServers',
+  },
+  cursor: {
+    file: join(homedir(), '.cursor', 'mcp.json'),
+    format: 'mcpServers',
+  },
+  windsurf: {
+    file: join(homedir(), '.codeium', 'windsurf', 'mcp_config.json'),
+    format: 'mcpServers',
+  },
+  'continue-dev': {
+    file: join(homedir(), '.continue', 'config.json'),
+    format: 'continue',
+  },
+  'claude-desktop': {
+    file: join(homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+    format: 'mcpServers',
+  },
+};
+
 export const HOT_MEMORY_MAX_TOKENS = 1300;
 export const CONTEXT_BUDGET_MAXIMUM = 6000;
 export const CONTEXT_BUDGET_STANDARD = 3000;
@@ -73,12 +96,23 @@ export const OLLAMA_MODEL_FALLBACK = 'llama3.1:8b';
 
 export type WatcherEngine = 'ollama' | 'session' | 'cloud' | 'none';
 
+export type CloudProvider =
+  | 'openai' | 'anthropic' | 'google' | 'mistral' | 'groq' | 'openrouter'
+  | 'xai' | 'together' | 'deepseek' | 'huggingface' | 'chutes'
+  | 'volcengine' | 'byteplus' | 'minimax' | 'moonshot' | 'qwen'
+  | 'cerebras' | 'litellm' | 'cloudflare' | 'venice' | 'kilocode'
+  | 'qianfan' | 'vercel-ai' | 'synthetic' | 'xiaomi'
+  | 'vllm' | 'zai' | 'copilot' | 'opencode-zen'
+  | 'custom';
+
 export interface CloudConfig {
-  provider: 'openai' | 'anthropic' | 'google' | 'mistral' | 'groq' | 'openrouter' | 'custom';
-  auth_method: 'oauth' | 'api_key';
+  provider: CloudProvider;
+  auth_method: 'api_key' | 'env_var';
   api_key?: string;
+  env_var_name?: string;
   model?: string;
   base_url?: string;
+  api_style?: 'openai' | 'anthropic';
 }
 
 export interface MemoryConfig {

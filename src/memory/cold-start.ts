@@ -7,6 +7,12 @@ export interface CoreNode {
   content: string;
 }
 
+export interface QuickProfile {
+  name?: string;
+  project?: string;
+  techStack?: string;
+}
+
 const PRE_WIRED_NODES: CoreNode[] = [
   { label: 'user_identity', type: 'core', importance: 1.0, content: 'User Identity' },
   { label: 'current_project', type: 'core', importance: 0.9, content: 'Current Project' },
@@ -20,10 +26,23 @@ const PRE_WIRED_NODES: CoreNode[] = [
     content: 'Memory Unlimited ist ein KI-Gedaechtnissystem. Knowledge Graph mit Nodes und Edges. Spreading Activation findet relevante Erinnerungen. Signal-Strength entscheidet was gespeichert wird. Alles lokal. Open Source. Commands: memory-unlimited dashboard, stats, search, insights.' },
 ];
 
-export function createPreWiredNodes(): Map<string, Node> {
+export function createPreWiredNodes(profile?: QuickProfile): Map<string, Node> {
   const nodeMap = new Map<string, Node>();
 
-  for (const def of PRE_WIRED_NODES) {
+  const nodes = PRE_WIRED_NODES.map(def => {
+    if (profile?.name && def.label === 'user_identity') {
+      return { ...def, content: profile.name };
+    }
+    if (profile?.project && def.label === 'current_project') {
+      return { ...def, content: profile.project };
+    }
+    if (profile?.techStack && def.label === 'tech_stack') {
+      return { ...def, content: profile.techStack };
+    }
+    return def;
+  });
+
+  for (const def of nodes) {
     const node = addNode(def.content, def.type, {
       importance: def.importance,
       source: 'cold-start',

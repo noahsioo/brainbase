@@ -203,6 +203,11 @@ body {
 #live-status.offline #live-dot {
   background: var(--red); box-shadow: 0 0 6px var(--red);
 }
+#live-status.paused { color: var(--gold); }
+#live-status.paused #live-dot {
+  background: var(--gold); box-shadow: 0 0 6px var(--gold);
+  animation: none;
+}
 @keyframes livePulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
@@ -526,7 +531,7 @@ body {
   font-weight: 600; letter-spacing: 0.5px; margin-top: 2px;
 }
 
-#live-status { cursor: pointer; position: relative; }
+#live-status { cursor: pointer; }
 #live-tooltip {
   position: absolute; bottom: 100%; right: 0; margin-bottom: 8px;
   background: rgba(10,12,25,0.95); border: 1px solid var(--glass-border);
@@ -536,6 +541,9 @@ body {
   transition: all 0.2s ease; font-family: 'JetBrains Mono', monospace;
 }
 #live-status:hover #live-tooltip { opacity: 1; transform: translateY(0); }
+#live-status:hover { opacity: 0.8; }
+#live-status:not(.offline):not(.paused):hover #live-text::after { content: ' (click to pause)'; font-size: 9px; color: var(--muted); }
+#live-status.paused:hover #live-text::after { content: ' (click to resume)'; font-size: 9px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -629,7 +637,7 @@ body {
           font-family="JetBrains Mono, monospace" font-weight="700">--</text>
       </svg>
       <div>
-        <div id="stats-health-label">BRAIN HEALTH</div>
+        <div id="stats-health-label">BRAIN LEVEL</div>
         <div id="brain-level"></div>
       </div>
     </div>
@@ -673,12 +681,13 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 const TYPE_COLORS = {
-  core: 0x00F0FF, fact: 0x00F0FF,
+  core: 0x00F0FF, fact: 0x38BDF8,
   identity: 0xFFB800, preference: 0x22D3A7,
   decision: 0xFF2D78, frustration: 0xF87171,
-  project: 0xA855F7, pattern: 0x22D3A7,
-  system_knowledge: 0x6B7280, auto_topic: 0x6B7280,
-  task: 0xFFB800,
+  failure: 0xEF4444, project: 0xA855F7,
+  pattern: 0x818CF8, system_knowledge: 0x94A3B8,
+  auto_topic: 0x7C8DB5, task: 0xFFB800,
+  prospective: 0xFBBF24, tacit: 0xC084FC,
 };
 
 function getColor(type) { return TYPE_COLORS[type] || 0x6B7280; }
@@ -699,6 +708,12 @@ function formatDateFull(ts) {
 }
 function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 function easeInOutCubic(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3) / 2; }
+function formatNumber(n) {
+  if (n >= 10000000) return Math.round(n / 1000000) + 'M';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'k';
+  return String(n);
+}
 
 let currentTab = 'brain';
 let graphNodes = [];
@@ -721,6 +736,10 @@ let lastInteraction = 0;
 let autoRotating = false;
 let mouseNDC = new THREE.Vector2(9999, 9999);
 let dataLoaded = false;
+
+
+let nodeDegree = [];
+let physicsEdges = [];
 
 let flowParticles = null;
 let flowData = [];
@@ -832,13 +851,41 @@ function createNodeMesh(node, position) {
   return mesh;
 }
 
+function computeNodeDegree() {
+  nodeDegree = new Array(graphNodes.length).fill(0);
+  for (const edge of graphEdges) {
+    const si = nodeMap[edge.source_id], ti = nodeMap[edge.target_id];
+    if (si !== undefined) nodeDegree[si]++;
+    if (ti !== undefined) nodeDegree[ti]++;
+  }
+}
+
+function buildPhysicsEdges() {
+  const maxPerNode = 8;
+  const edgesPerNode = new Array(graphNodes.length).fill(null).map(() => []);
+  for (const e of graphEdges) {
+    const si = nodeMap[e.source_id], ti = nodeMap[e.target_id];
+    if (si !== undefined) edgesPerNode[si].push(e);
+    if (ti !== undefined) edgesPerNode[ti].push(e);
+  }
+  const selected = new Set();
+  for (let i = 0; i < graphNodes.length; i++) {
+    const edges = edgesPerNode[i];
+    edges.sort((a, b) => (b.strength || 0.5) - (a.strength || 0.5));
+    for (let j = 0; j < Math.min(maxPerNode, edges.length); j++) {
+      selected.add(edges[j]);
+    }
+  }
+  physicsEdges = Array.from(selected);
+}
+
 function rebuildEdges() {
   while (edgeGroup.children.length > 0) {
     const c = edgeGroup.children[0];
     c.geometry.dispose(); c.material.dispose(); edgeGroup.remove(c);
   }
   const positions = [], colors = [];
-  for (const edge of graphEdges) {
+  for (const edge of physicsEdges) {
     const si = nodeMap[edge.source_id], ti = nodeMap[edge.target_id];
     if (si === undefined || ti === undefined) continue;
     const a = simNodes[si], b = simNodes[ti];
@@ -847,7 +894,7 @@ function rebuildEdges() {
     positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
     const cA = new THREE.Color(getColor(a.node.type));
     const cB = new THREE.Color(getColor(b.node.type));
-    const alpha = 0.08 + (edge.strength || 0.5) * 0.25;
+    const alpha = 0.1 + (edge.strength || 0.5) * 0.3;
     colors.push(cA.r*alpha, cA.g*alpha, cA.b*alpha);
     colors.push(cB.r*alpha, cB.g*alpha, cB.b*alpha);
   }
@@ -856,7 +903,7 @@ function rebuildEdges() {
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   edgeLines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-    vertexColors: true, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false,
+    vertexColors: true, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false,
   }));
   edgeGroup.add(edgeLines);
 }
@@ -866,7 +913,7 @@ function rebuildEdgePositions() {
   const pos = edgeLines.geometry.attributes.position;
   if (!pos) return;
   let idx = 0;
-  for (const edge of graphEdges) {
+  for (const edge of physicsEdges) {
     const si = nodeMap[edge.source_id], ti = nodeMap[edge.target_id];
     if (si === undefined || ti === undefined) continue;
     const a = simNodes[si], b = simNodes[ti];
@@ -885,23 +932,10 @@ function createFlowParticles() {
   }
   flowData = [];
 
-  let validEdges = 0;
-  for (const edge of graphEdges) {
-    const si = nodeMap[edge.source_id], ti = nodeMap[edge.target_id];
-    if (si === undefined || ti === undefined) continue;
-    if (hiddenTypes.has(simNodes[si].node.type) || hiddenTypes.has(simNodes[ti].node.type)) continue;
-    validEdges++;
-  }
-
   const particlesPerEdge = 3;
-  const totalParticles = validEdges * particlesPerEdge;
-  if (totalParticles === 0) { flowParticles = null; return; }
+  const posArr = [], colArr = [];
 
-  const positions = new Float32Array(totalParticles * 3);
-  const colors = new Float32Array(totalParticles * 3);
-
-  let pIdx = 0;
-  for (const edge of graphEdges) {
+  for (const edge of physicsEdges) {
     const si = nodeMap[edge.source_id], ti = nodeMap[edge.target_id];
     if (si === undefined || ti === undefined) continue;
     const a = simNodes[si], b = simNodes[ti];
@@ -911,19 +945,16 @@ function createFlowParticles() {
     for (let p = 0; p < particlesPerEdge; p++) {
       const t = p / particlesPerEdge;
       flowData.push({ si, ti, t: t + Math.random() * 0.1, speed: 0.003 + Math.random() * 0.005 });
-      positions[pIdx*3] = a.x + (b.x-a.x)*t;
-      positions[pIdx*3+1] = a.y + (b.y-a.y)*t;
-      positions[pIdx*3+2] = a.z + (b.z-a.z)*t;
-      colors[pIdx*3] = col.r;
-      colors[pIdx*3+1] = col.g;
-      colors[pIdx*3+2] = col.b;
-      pIdx++;
+      posArr.push(a.x + (b.x-a.x)*t, a.y + (b.y-a.y)*t, a.z + (b.z-a.z)*t);
+      colArr.push(col.r, col.g, col.b);
     }
   }
 
+  if (flowData.length === 0) { flowParticles = null; return; }
+
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(posArr), 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colArr), 3));
   flowParticles = new THREE.Points(geo, new THREE.PointsMaterial({
     size: 1.0, vertexColors: true, transparent: true, opacity: 0.5,
     blending: THREE.AdditiveBlending, depthWrite: false,
@@ -957,7 +988,8 @@ function initSimulation() {
   const types = Object.keys(typeGroups);
   types.forEach((t, i) => {
     const angle = (i / types.length) * Math.PI * 2;
-    typeOffsets[t] = { x: Math.cos(angle) * 30, y: 0, z: Math.sin(angle) * 30 };
+    const spread = Math.max(30, Math.sqrt(graphNodes.length) * 5);
+    typeOffsets[t] = { x: Math.cos(angle) * spread, y: 0, z: Math.sin(angle) * spread };
   });
 
   simNodes = graphNodes.map((n, i) => {
@@ -982,11 +1014,45 @@ function initSimulation() {
     nodeGroup.add(mesh);
     nodeMeshes.push(mesh);
   }
+  computeNodeDegree();
+  buildPhysicsEdges();
+  // Pre-simulate 150 steps so nodes reach equilibrium before camera setup
+  for (let i = 0; i < 150; i++) stepSimulation();
+  // Update mesh positions to match pre-simulated positions
+  for (let i = 0; i < simNodes.length; i++) {
+    const sn = simNodes[i];
+    nodeMeshes[i].position.set(sn.x, sn.y, sn.z);
+  }
   rebuildEdges();
   createFlowParticles();
+  let maxDist = 0;
+  for (const sn of simNodes) {
+    const d = Math.sqrt(sn.x*sn.x + sn.y*sn.y + sn.z*sn.z);
+    if (d > maxDist) maxDist = d;
+  }
+  const fitDist = Math.max(200, maxDist * 2.5);
+  camera.position.set(0, fitDist * 0.15, fitDist);
+  controls.target.set(0, 0, 0);
+  controls.maxDistance = Math.max(300, maxDist * 3.5);
+  camera.far = Math.max(2000, maxDist * 8);
+  camera.updateProjectionMatrix();
+  scene.fog = new THREE.FogExp2(0x06060F, Math.min(0.0008, 0.15 / fitDist));
   brainFormingStart = performance.now();
   isBrainForming = true;
 }
+
+function updateMaxZoom() {
+  if (simNodes.length === 0) return;
+  let maxDist = 0;
+  for (const sn of simNodes) {
+    const d = Math.sqrt(sn.x*sn.x + sn.y*sn.y + sn.z*sn.z);
+    if (d > maxDist) maxDist = d;
+  }
+  controls.maxDistance = Math.max(300, maxDist * 3.5);
+  camera.far = Math.max(2000, maxDist * 8);
+  camera.updateProjectionMatrix();
+}
+
 
 function stepSimulation() {
   const n = simNodes.length;
@@ -1002,7 +1068,7 @@ function stepSimulation() {
       b.vx-=fx; b.vy-=fy; b.vz-=fz;
     }
   }
-  for (const e of graphEdges) {
+  for (const e of physicsEdges) {
     const si=nodeMap[e.source_id], ti=nodeMap[e.target_id];
     if (si===undefined||ti===undefined) continue;
     const a=simNodes[si], b=simNodes[ti];
@@ -1014,8 +1080,9 @@ function stepSimulation() {
     b.vx-=fx; b.vy-=fy; b.vz-=fz;
   }
   for (const sn of simNodes) { sn.vx-=sn.x*0.001; sn.vy-=sn.y*0.001; sn.vz-=sn.z*0.001; }
+  const damp = 0.85;
   for (const sn of simNodes) {
-    sn.vx*=0.85; sn.vy*=0.85; sn.vz*=0.85;
+    sn.vx*=damp; sn.vy*=damp; sn.vz*=damp;
     sn.x+=sn.vx; sn.y+=sn.vy; sn.z+=sn.vz;
   }
   for (let i=0; i<simNodes.length; i++) {
@@ -1088,7 +1155,9 @@ function updateSpreadingVisuals() {
       const cA=new THREE.Color(getColor(a.node.type));
       const cB=new THREE.Color(getColor(b.node.type));
       if (edgeGlow>0) { cA.lerp(new THREE.Color(0xffffff),edgeGlow*0.6); cB.lerp(new THREE.Color(0xffffff),edgeGlow*0.6); }
-      const alpha = 0.08 + (edge.strength||0.5)*0.25 + edgeGlow*0.7;
+      const avgDeg = ((nodeDegree[si] || 0) + (nodeDegree[ti] || 0)) / 2;
+      const densityFactor = Math.max(0.06, Math.pow(15 / Math.max(15, avgDeg), 0.85));
+      const alpha = (0.08 + (edge.strength||0.5)*0.25) * densityFactor + edgeGlow*0.7;
       col.array[idx*3]=cA.r*alpha; col.array[idx*3+1]=cA.g*alpha; col.array[idx*3+2]=cA.b*alpha; idx++;
       col.array[idx*3]=cB.r*alpha; col.array[idx*3+1]=cB.g*alpha; col.array[idx*3+2]=cB.b*alpha; idx++;
     }
@@ -1228,6 +1297,18 @@ canvas.addEventListener('click', () => {
   }
 });
 
+canvas.addEventListener('dblclick', () => {
+  if (hoveredMeshIndex >= 0) return;
+  if (simNodes.length === 0) return;
+  let maxDist = 0;
+  for (const sn of simNodes) {
+    const d = Math.sqrt(sn.x*sn.x + sn.y*sn.y + sn.z*sn.z);
+    if (d > maxDist) maxDist = d;
+  }
+  const target = Math.max(200, maxDist * 2.5);
+  camera.position.set(0, target * 0.15, target);
+  controls.target.set(0, 0, 0);
+});
 canvas.addEventListener('mousedown', () => { lastInteraction = performance.now(); autoRotating = false; });
 canvas.addEventListener('wheel', () => { lastInteraction = performance.now(); autoRotating = false; });
 
@@ -1405,12 +1486,17 @@ function updateNodeVisuals(time, dt) {
 }
 
 function animateValue(el, target, duration) {
-  const start = parseInt(el.textContent) || 0;
-  if (start === target) return;
+  const text = el.textContent || '0';
+  let start = 0;
+  if (text.endsWith('k')) start = parseFloat(text) * 1000;
+  else if (text.endsWith('M')) start = parseFloat(text) * 1000000;
+  else start = parseInt(text) || 0;
+  if (Math.round(start) === target) return;
   const t0 = performance.now();
   function tick(now) {
     const p = Math.min((now - t0) / duration, 1);
-    el.textContent = Math.round(start + (target - start) * easeOutCubic(p));
+    const val = Math.round(start + (target - start) * easeOutCubic(p));
+    el.textContent = formatNumber(val);
     if (p < 1) requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
@@ -1427,11 +1513,41 @@ function updateStats(stats) {
   const bl = document.getElementById('brain-level');
   if (bl) {
     const n = stats.totalNodes || 0;
-    if (n >= 1000) { bl.textContent = 'Superintelligence'; bl.style.color = 'var(--gold)'; }
-    else if (n >= 300) { bl.textContent = 'Powerful Brain'; bl.style.color = 'var(--purple)'; }
-    else if (n >= 100) { bl.textContent = 'Active Brain'; bl.style.color = 'var(--green)'; }
-    else if (n >= 25) { bl.textContent = 'Growing Brain'; bl.style.color = 'var(--cyan)'; }
-    else { bl.textContent = 'Newborn Brain'; bl.style.color = 'var(--muted)'; }
+    const levels = [
+      { min: 0, name: 'Newborn Brain', color: 'var(--muted)' },
+      { min: 25, name: 'Awakening Brain', color: 'var(--cyan)' },
+      { min: 75, name: 'Growing Brain', color: 'var(--cyan)' },
+      { min: 200, name: 'Active Brain', color: 'var(--green)' },
+      { min: 500, name: 'Sharp Brain', color: 'var(--green)' },
+      { min: 1000, name: 'Powerful Brain', color: 'var(--purple)' },
+      { min: 2500, name: 'Brilliant Brain', color: 'var(--purple)' },
+      { min: 5000, name: 'Genius Brain', color: 'var(--gold)' },
+      { min: 10000, name: 'Mastermind', color: 'var(--gold)' },
+      { min: 25000, name: 'Superintelligence', color: 'var(--gold)' },
+    ];
+    let lvl = 0;
+    for (let i = levels.length - 1; i >= 0; i--) {
+      if (n >= levels[i].min) { lvl = i; break; }
+    }
+    const current = levels[lvl];
+    bl.textContent = current.name;
+    bl.style.color = current.color;
+
+    const levelNum = lvl + 1;
+    const nextMin = lvl < levels.length - 1 ? levels[lvl + 1].min : levels[lvl].min;
+    const currMin = levels[lvl].min;
+    const progress = lvl < levels.length - 1 ? Math.min(1, (n - currMin) / (nextMin - currMin)) : 1;
+
+    const ring = document.getElementById('health-ring');
+    const circ = 150.8;
+    ring.style.stroke = current.color;
+    ring.setAttribute('stroke-dashoffset', String(circ * (1 - progress)));
+    document.getElementById('health-text').textContent = levelNum;
+
+    const sRing = document.getElementById('sidebar-health-ring');
+    sRing.style.stroke = current.color;
+    sRing.setAttribute('stroke-dashoffset', String(94.2 * (1 - progress)));
+    document.getElementById('sidebar-health-text').textContent = levelNum;
   }
 }
 
@@ -1440,18 +1556,6 @@ async function updateHealthRing() {
     const res = await fetch('/api/health');
     const h = await res.json();
     healthScore = h.score;
-    const color = h.score >= 80 ? 'var(--cyan)' : h.score >= 50 ? 'var(--gold)' : 'var(--red)';
-
-    const ring = document.getElementById('health-ring');
-    const circ = 150.8;
-    ring.style.stroke = color;
-    ring.setAttribute('stroke-dashoffset', String(circ * (1 - h.score / 100)));
-    document.getElementById('health-text').textContent = h.score;
-
-    const sRing = document.getElementById('sidebar-health-ring');
-    sRing.style.stroke = color;
-    sRing.setAttribute('stroke-dashoffset', String(94.2 * (1 - h.score / 100)));
-    document.getElementById('sidebar-health-text').textContent = h.score;
   } catch {}
 }
 
@@ -1485,16 +1589,34 @@ async function checkDaemon() {
   const lt = document.getElementById('live-text');
   const tip = document.getElementById('live-tooltip');
   try {
-    await fetch('http://localhost:7899/health', { mode: 'no-cors', signal: AbortSignal.timeout(2000) });
-    li.classList.remove('offline');
-    lt.textContent = 'Live';
-    if (tip) tip.textContent = 'Watcher active — learning in real-time';
+    const res = await fetch('http://localhost:7899/health', { signal: AbortSignal.timeout(2000) });
+    const data = await res.json();
+    li.classList.remove('offline', 'paused');
+    if (data.status === 'paused') {
+      li.classList.add('paused');
+      lt.textContent = 'Paused';
+      if (tip) tip.textContent = 'Watcher paused — click to resume';
+    } else {
+      lt.textContent = 'Live';
+      if (tip) tip.textContent = 'Watcher active — click to pause';
+    }
   } catch {
+    li.classList.remove('paused');
     li.classList.add('offline');
     lt.textContent = 'Offline';
     if (tip) tip.textContent = 'Watcher offline. Run: memory-unlimited watch';
   }
 }
+
+document.getElementById('live-status').addEventListener('click', async () => {
+  const li = document.getElementById('live-status');
+  if (li.classList.contains('offline')) return;
+  const isPaused = li.classList.contains('paused');
+  try {
+    await fetch(`http://localhost:7899/${isPaused ? 'resume' : 'pause'}`, { method: 'POST' });
+    checkDaemon();
+  } catch {}
+});
 
 document.querySelectorAll('.sidebar-btn').forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -2068,8 +2190,15 @@ async function poll() {
         if (!existingPos[sn.node.id]) mesh.userData.flashTime = 0.5;
         nodeGroup.add(mesh); nodeMeshes.push(mesh);
       }
+      computeNodeDegree();
+      buildPhysicsEdges();
       rebuildEdges();
       createFlowParticles();
+      const brainRadius = Math.max(120, Math.sqrt(graphNodes.length) * 12);
+      controls.maxDistance = brainRadius * 4;
+      camera.far = Math.max(2000, brainRadius * 8);
+      camera.updateProjectionMatrix();
+      scene.fog = new THREE.FogExp2(0x06060F, Math.min(0.0008, 0.15 / brainRadius));
       updateStats(data.stats);
       buildLegend();
       frameCount = 0;
@@ -2093,8 +2222,9 @@ function animate() {
   const time = clock.getElapsedTime();
   frameCount++;
 
-  if (frameCount < 300) stepSimulation();
-  else if (frameCount % 8 === 0) stepSimulation();
+  if (frameCount < 300 && frameCount % 2 === 0) { stepSimulation(); updateMaxZoom(); }
+  else if (frameCount < 600 && frameCount % 8 === 0) { stepSimulation(); updateMaxZoom(); }
+  else if (frameCount % 30 === 0) { stepSimulation(); updateMaxZoom(); }
 
   if (currentTab !== 'brain') return;
 

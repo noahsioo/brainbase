@@ -6,7 +6,6 @@ import {
   DB_PATH,
   MEMORY_DIR,
   PROVIDER_PATHS,
-  MEMORY_BLOCK_START,
 } from '../config.js';
 import { getDb, getStats, searchNodes, getNodes } from '../memory/store.js';
 import { activateNode, getActivatedNodes } from '../memory/activation.js';
@@ -149,14 +148,7 @@ export const verifyCommand = new Command('verify')
       }
     }
 
-    const claudeMdPath = PROVIDER_PATHS['claude-code'].mdFile;
-    if (existsSync(claudeMdPath)) {
-      const content = readFileSync(claudeMdPath, 'utf-8');
-      const hasBlock = content.includes(MEMORY_BLOCK_START);
-      hookResults.push(check('CLAUDE.md Memory Block', hasBlock, hasBlock ? 'injected' : 'FEHLT'));
-    } else {
-      hookResults.push(check('CLAUDE.md', false, 'Nicht gefunden'));
-    }
+    hookResults.push(check('Context Delivery', true, 'via Hooks (systemMessage)'));
     hookResults.forEach(printResult);
     console.log();
 

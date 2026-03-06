@@ -1,6 +1,7 @@
 import { getDb } from '../memory/store.js';
 import { getSystemState, setSystemState } from '../memory/cold-start.js';
 import { markRecentOutcomesSuccess } from '../learning/outcome-tracker.js';
+import { trackFailure } from '../memory/prospective.js';
 
 export type FeedbackSignal = 'positive' | 'negative' | 'neutral';
 export type Mood = 'neutral' | 'frustrated' | 'excited' | 'focused';
@@ -61,6 +62,9 @@ export function setCurrentMood(mood: Mood): void {
 export function applyFeedbackOutcome(signal: FeedbackSignal, sessionId: string): void {
   if (signal === 'positive') {
     markRecentOutcomesSuccess(sessionId);
+  }
+  if (signal === 'negative') {
+    trackFailure('negative feedback', sessionId);
   }
 }
 

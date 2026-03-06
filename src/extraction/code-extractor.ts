@@ -79,6 +79,46 @@ function cleanExtracted(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ');
 }
 
+const EXTRACTION_STOPWORDS = new Set([
+  'und', 'oder', 'aber', 'and', 'or', 'but', 'also', 'dann', 'weil', 'because',
+  'that', 'the', 'ein', 'eine', 'der', 'die', 'das', 'den', 'dem', 'des',
+  'ich', 'du', 'er', 'sie', 'es', 'wir', 'ihr', 'mein', 'dein', 'sein',
+  'nicht', 'kein', 'keine', 'noch', 'schon', 'nur', 'wenn', 'wie', 'was',
+  'wo', 'wer', 'wann', 'hab', 'hat', 'bin', 'bist', 'sind', 'war', 'will',
+  'kann', 'muss', 'ist', 'mit', 'von', 'zu', 'in', 'auf', 'an', 'fuer', 'für',
+  'is', 'with', 'of', 'to', 'on', 'for', 'at', 'by', 'it', 'he', 'she',
+  'we', 'you', 'they', 'not', 'no', 'if', 'so', 'be', 'am', 'are',
+  'have', 'has', 'had', 'was', 'were', 'can', 'would', 'should',
+  'do', 'does', 'did', 'this', 'these', 'those', 'my', 'your',
+  'his', 'her', 'its', 'our', 'their', 'here', 'there', 'all', 'some',
+  'just', 'only', 'get', 'got', 'let', 'make', 'mach', 'mal', 'halt',
+  'lass', 'bitte', 'ja', 'nein', 'ok', 'okay', 'vielleicht', 'eigentlich',
+  'einfach', 'bisschen', 'sozusagen', 'ding', 'basically', 'actually',
+  'stuff', 'thing', 'like', 'really', 'very', 'quite',
+]);
+
+function isValidContent(content: string, type: string): boolean {
+  if (content.length < 5) return false;
+
+  const words = content.split(' ');
+  const realWords = words.filter(w => !EXTRACTION_STOPWORDS.has(w.toLowerCase()));
+
+  if (realWords.length === 0) return false;
+
+  if (type === 'identity') {
+    if (words.length > 3) return false;
+    if (!/^[A-ZÄÖÜ]/.test(content)) return false;
+    if (realWords.length === 0) return false;
+    if (content.length < 3) return false;
+  }
+
+  if (type === 'preference' || type === 'fact') {
+    if (realWords.length < 3) return false;
+  }
+
+  return true;
+}
+
 function isDuplicate(content: string): Node | null {
   const existing = searchNodes(content, 10);
   const lower = content.toLowerCase();
@@ -116,7 +156,8 @@ export function extractFromPrompt(prompt: string, sessionId: string, flags?: Key
       content = words.join(' ');
     }
 
-    if (content.length < 2 || content.length > 200) continue;
+    if (content.length > 200) continue;
+    if (!isValidContent(content, pattern.type)) continue;
 
     const existingNode = isDuplicate(content);
     if (existingNode) {

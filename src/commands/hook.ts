@@ -7,14 +7,28 @@ import { handlePreCompact } from '../hooks/pre-compact.js';
 function readStdin(): Promise<string> {
   return new Promise((resolve) => {
     let data = '';
+    let resolved = false;
+
+    const done = (result: string) => {
+      if (!resolved) {
+        resolved = true;
+        resolve(result);
+      }
+    };
+
+    if (process.stdin.isTTY) {
+      done('{}');
+      return;
+    }
+
     process.stdin.setEncoding('utf-8');
     process.stdin.on('data', (chunk) => { data += chunk; });
-    process.stdin.on('end', () => resolve(data));
+    process.stdin.on('end', () => done(data));
+    process.stdin.on('error', () => done('{}'));
 
-    // If stdin is a TTY (no piped input), resolve immediately
-    if (process.stdin.isTTY) {
-      resolve('{}');
-    }
+    setTimeout(() => done(data || '{}'), 3000);
+
+    process.stdin.resume();
   });
 }
 
@@ -34,15 +48,24 @@ export const hookCommand = new Command('hook')
     const input = await parseStdinJson();
 
     switch (event) {
-      case 'session-start':
-        await handleSessionStart(input as { session_id?: string; transcript_path?: string });
+      case 'session-start': {
+        const startSessionId = (input.session_id || input.sessionId) as string | undefined;
+        const transcriptPath = (input.transcript_path || input.transcriptPath) as string | undefined;
+        await handleSessionStart({ session_id: startSessionId, transcript_path: transcriptPath });
         break;
-      case 'user-prompt':
-        await handleUserPrompt(input as { session_id?: string; user_prompt?: string });
+      }
+      case 'user-prompt': {
+        const userPrompt = (input.prompt || input.user_prompt || input.message || input.input || input.query || input.content) as string | undefined;
+        const sessionId = (input.session_id || input.sessionId) as string | undefined;
+        await handleUserPrompt({ session_id: sessionId, user_prompt: userPrompt });
         break;
-      case 'session-end':
-        await handleSessionEnd(input as { session_id?: string; transcript_path?: string });
+      }
+      case 'session-end': {
+        const endSessionId = (input.session_id || input.sessionId) as string | undefined;
+        const endTranscriptPath = (input.transcript_path || input.transcriptPath) as string | undefined;
+        await handleSessionEnd({ session_id: endSessionId, transcript_path: endTranscriptPath });
         break;
+      }
       case 'pre-compact':
         await handlePreCompact();
         break;

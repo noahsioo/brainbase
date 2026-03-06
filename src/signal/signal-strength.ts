@@ -8,11 +8,12 @@ import {
 } from './counters.js';
 import { searchNodes } from '../memory/store.js';
 import { loadPrediction, calculatePredictionError } from './prediction.js';
+import { isCriticalPeriod } from '../memory/cold-start.js';
 
 // Thresholds
 export const GATE_IGNORE = 0.3;
 export const GATE_HEBBIAN = 0.3;
-export const GATE_LLM = 0.6;
+export const GATE_LLM = 0.15;
 
 // Factor weights (sum = 1.0)
 const W_REPETITION = 0.13;
@@ -126,13 +127,14 @@ export function calculateSignalStrength(text: string, sessionId: string): Signal
 
   // Explicit memory + Decision requests always get full extraction
   let score = rawScore;
-  if (flags.explicit_memory) score = Math.max(score, GATE_LLM + 0.01);
-  if (flags.decision) score = Math.max(score, GATE_LLM + 0.01);
+  const effectiveGateLLM = isCriticalPeriod() ? 0.3 : GATE_LLM;
+  if (flags.explicit_memory) score = Math.max(score, effectiveGateLLM + 0.01);
+  if (flags.decision) score = Math.max(score, effectiveGateLLM + 0.01);
 
   let action: SignalAction;
   if (score < GATE_IGNORE) {
     action = 'ignore';
-  } else if (score < GATE_LLM) {
+  } else if (score < effectiveGateLLM) {
     action = 'hebbian_only';
   } else {
     action = 'full_extraction';
