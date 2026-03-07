@@ -30,13 +30,13 @@ const cb = chalk.bold.cyan;
 const dim = chalk.dim;
 
 const BANNER = `
-${cb('  ███╗   ███╗███████╗███╗   ███╗ ██████╗ ██████╗ ██╗   ██╗')}
-${cb('  ████╗ ████║██╔════╝████╗ ████║██╔═══██╗██╔══██╗╚██╗ ██╔╝')}
-${cb('  ██╔████╔██║█████╗  ██╔████╔██║██║   ██║██████╔╝ ╚████╔╝ ')}
-${cb('  ██║╚██╔╝██║██╔══╝  ██║╚██╔╝██║██║   ██║██╔══██╗  ╚██╔╝  ')}
-${cb('  ██║ ╚═╝ ██║███████╗██║ ╚═╝ ██║╚██████╔╝██║  ██║   ██║   ')}
-${cb('  ╚═╝     ╚═╝╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ')}
-${chalk.bold.white('       U N L I M I T E D')}  ${dim('v0.1')}
+${cb('  ██████╗ ██████╗  █████╗ ██╗███╗   ██╗')}
+${cb('  ██╔══██╗██╔══██╗██╔══██╗██║████╗  ██║')}
+${cb('  ██████╔╝██████╔╝███████║██║██╔██╗ ██║')}
+${cb('  ██╔══██╗██╔══██╗██╔══██║██║██║╚██╗██║')}
+${cb('  ██████╔╝██║  ██║██║  ██║██║██║ ╚████║')}
+${cb('  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝')}
+${chalk.bold.white('       B R A I N B A S E')}  ${dim('v0.1')}
 `;
 
 const DISPLAY_NAMES: Record<string, string> = {
@@ -1105,7 +1105,7 @@ function writeCleanInstruction(filePath: string): void {
   }
 
   // Remove old memory block if present
-  const blockRegex = /<!-- MEMORY-UNLIMITED:START[\s\S]*?MEMORY-UNLIMITED:END -->\n?/g;
+  const blockRegex = /<!-- (?:MEMORY-UNLIMITED|BRAINBASE):START[\s\S]*?(?:MEMORY-UNLIMITED|BRAINBASE):END -->\n?/g;
   existing = existing.replace(blockRegex, '').trim();
 
   // Only add if not already present
@@ -1121,7 +1121,7 @@ function appendCleanInstruction(filePath: string): void {
   let existing = readFileSync(filePath, 'utf-8');
 
   // Remove old memory block if present
-  const blockRegex = /<!-- MEMORY-UNLIMITED:START[\s\S]*?MEMORY-UNLIMITED:END -->\n?/g;
+  const blockRegex = /<!-- (?:MEMORY-UNLIMITED|BRAINBASE):START[\s\S]*?(?:MEMORY-UNLIMITED|BRAINBASE):END -->\n?/g;
   existing = existing.replace(blockRegex, '').trim();
 
   // Only add if not already present

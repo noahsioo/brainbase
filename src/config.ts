@@ -136,8 +136,8 @@ export const CONTEXT_BUDGET_STANDARD = 3000;
 export const CONTEXT_BUDGET_LIGHT = 1300;
 export const CONTEXT_BUDGET_MINIMAL = 500;
 
-export const MEMORY_BLOCK_START = '<!-- MEMORY-UNLIMITED:START - DO NOT EDIT THIS BLOCK -->';
-export const MEMORY_BLOCK_END = '<!-- MEMORY-UNLIMITED:END -->';
+export const MEMORY_BLOCK_START = '<!-- BRAINBASE:START - DO NOT EDIT THIS BLOCK -->';
+export const MEMORY_BLOCK_END = '<!-- BRAINBASE:END -->';
 
 export const OLLAMA_URL = 'http://localhost:11434';
 export const OLLAMA_MODEL_PRIMARY = 'llama3.2:3b';
