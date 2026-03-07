@@ -48,7 +48,7 @@ function checkHooksIntact(): void {
       const hasOurs = eventHooks.some((h: Record<string, unknown>) => {
         const innerHooks = (h.hooks || []) as Array<Record<string, unknown>>;
         return innerHooks.some((hh) =>
-          typeof hh.command === 'string' && hh.command.startsWith('memory-unlimited'),
+          typeof hh.command === 'string' && hh.command.startsWith('brainbase'),
         );
       });
 

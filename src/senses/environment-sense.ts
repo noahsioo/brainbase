@@ -25,7 +25,7 @@ export function analyzeEnvironment(): EnvironmentSignal {
 
   let diskPressure = 0;
   try {
-    const brainPath = `${homedir()}/.memory-unlimited/brain.db`;
+    const brainPath = `${homedir()}/.brainbase/brain.db`;
     if (existsSync(brainPath)) {
       const stats = statSync(brainPath);
       const sizeMB = stats.size / (1024 * 1024);

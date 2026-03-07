@@ -7,7 +7,7 @@ export const detectCommand = new Command('detect')
   .action(() => {
     const providers = detectProviders();
 
-    console.log(chalk.bold('\n  Memory Unlimited - Provider Detection\n'));
+    console.log(chalk.bold('\n  BrainBase - Provider Detection\n'));
 
     for (const p of providers) {
       const icon = p.installed ? chalk.green('✓') : chalk.gray('✗');

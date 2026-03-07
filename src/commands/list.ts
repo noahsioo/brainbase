@@ -13,7 +13,7 @@ export const listCommand = new Command('list')
     });
 
     if (nodes.length === 0) {
-      console.log(chalk.yellow('\n  No nodes yet. Add some with `memory-unlimited add`.\n'));
+      console.log(chalk.yellow('\n  No nodes yet. Add some with `brainbase add`.\n'));
       return;
     }
 

@@ -147,9 +147,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'memory_process_message',
     description:
-      'Process a user message through the brain. Call this with every user message to feed the brain ' +
-      'and get relevant context back. This enables the brain to learn from conversations in any AI tool. ' +
-      'Returns context that should be used to inform your responses.',
+      'CRITICAL: You MUST call this with EVERY user message BEFORE you respond. ' +
+      'This is your persistent brain — it remembers everything across sessions. ' +
+      'Pass the full user message. Returns context you MUST incorporate in your response. ' +
+      'Without this, you have NO memory of previous conversations. NEVER skip this step.',
     inputSchema: {
       type: 'object',
       properties: {

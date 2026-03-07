@@ -23,7 +23,7 @@ import { embedCommand } from './commands/embed.js';
 const program = new Command();
 
 program
-  .name('memory-unlimited')
+  .name('brainbase')
   .description('Cross-provider persistent memory system for AI coding assistants')
   .version('0.1.0');
 

@@ -6,12 +6,12 @@ import { CONFIG_PATH, DB_PATH, PID_PATH, PROVIDER_PATHS, MEMORY_BLOCK_START } fr
 import { getStats } from '../memory/store.js';
 
 export const statusCommand = new Command('status')
-  .description('Show Memory Unlimited system status')
+  .description('Show BrainBase system status')
   .action(() => {
-    console.log(chalk.bold('\n  Memory Unlimited - Status\n'));
+    console.log(chalk.bold('\n  BrainBase - Status\n'));
 
     const initialized = existsSync(CONFIG_PATH);
-    console.log(`  ${initialized ? chalk.green('✓') : chalk.red('✗')} Initialized: ${initialized ? 'Yes' : 'No - run `memory-unlimited init`'}`);
+    console.log(`  ${initialized ? chalk.green('✓') : chalk.red('✗')} Initialized: ${initialized ? 'Yes' : 'No - run `brainbase init`'}`);
 
     const dbExists = existsSync(DB_PATH);
     console.log(`  ${dbExists ? chalk.green('✓') : chalk.red('✗')} Database: ${dbExists ? DB_PATH : 'Not created'}`);

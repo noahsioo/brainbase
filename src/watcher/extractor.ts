@@ -89,7 +89,7 @@ If the answer is NO → do NOT store it. Set nothing_new: true instead.
 ## ENTITIES
 Atomic concepts: people, technologies, projects, tools, places, foods, skills, organizations.
 Each entity must be a SINGLE named concept, not a phrase or description.
-- GOOD entities: "Lovis", "TypeScript", "Memory Unlimited", "Berlin", "React"
+- GOOD entities: "Lovis", "TypeScript", "BrainBase", "Berlin", "React"
 - BAD entities: "the system", "it", "something", "a thing", "brain", "idea", "concept"
 
 Entity types: person, technology, project, concept, tool, food, place, organization, skill, language, framework, library, service, topic

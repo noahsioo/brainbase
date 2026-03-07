@@ -23,7 +23,7 @@ const PRE_WIRED_NODES: CoreNode[] = [
   { label: 'goals', type: 'core', importance: 0.8, content: 'Goals' },
   { label: 'expertise_map', type: 'core', importance: 0.7, content: 'Expertise Map' },
   { label: 'system_knowledge', type: 'system_knowledge', importance: 0.6,
-    content: 'Memory Unlimited ist ein KI-Gedaechtnissystem. Knowledge Graph mit Nodes und Edges. Spreading Activation findet relevante Erinnerungen. Signal-Strength entscheidet was gespeichert wird. Alles lokal. Open Source. Commands: memory-unlimited dashboard, stats, search, insights.' },
+    content: 'BrainBase ist ein KI-Gedaechtnissystem. Knowledge Graph mit Nodes und Edges. Spreading Activation findet relevante Erinnerungen. Signal-Strength entscheidet was gespeichert wird. Alles lokal. Open Source. Commands: brainbase dashboard, stats, search, insights.' },
 ];
 
 export function createPreWiredNodes(profile?: QuickProfile): Map<string, Node> {

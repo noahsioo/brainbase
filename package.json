@@ -1,11 +1,11 @@
 {
-  "name": "memory-unlimited",
+  "name": "brainbase",
   "version": "0.1.0",
   "description": "Cross-provider persistent memory system for AI coding assistants",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "memory-unlimited": "dist/index.js"
+    "brainbase": "dist/index.js"
   },
   "scripts": {
     "build": "tsc && mkdir -p dist/dashboard && cp src/dashboard/*.html dist/dashboard/",

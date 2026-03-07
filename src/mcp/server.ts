@@ -2,8 +2,10 @@
 
 import { createInterface } from 'readline';
 import { TOOL_DEFINITIONS, handleToolCall } from './tools.js';
+import { generateContext } from '../memory/context-generator.js';
+import { getDb } from '../memory/store.js';
 
-const SERVER_NAME = 'memory-unlimited';
+const SERVER_NAME = 'brainbase';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
@@ -36,6 +38,8 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
           protocolVersion: PROTOCOL_VERSION,
           capabilities: {
             tools: {},
+            resources: {},
+            prompts: {},
           },
           serverInfo: {
             name: SERVER_NAME,
@@ -72,6 +76,116 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
       });
       break;
     }
+
+    case 'resources/list':
+      send({
+        jsonrpc: '2.0',
+        id: req.id ?? null,
+        result: {
+          resources: [
+            {
+              uri: 'memory://brain/context',
+              name: 'Brain Context',
+              description: 'Current memory context — identity, active memories, session state. Auto-loaded at conversation start.',
+              mimeType: 'text/plain',
+            },
+            {
+              uri: 'memory://brain/identity',
+              name: 'User Identity',
+              description: 'User profile, preferences, and tech stack from persistent memory.',
+              mimeType: 'text/plain',
+            },
+          ],
+        },
+      });
+      break;
+
+    case 'resources/read': {
+      const uri = (req.params?.uri as string) || '';
+      let resourceContent = '';
+
+      if (uri === 'memory://brain/context') {
+        try {
+          resourceContent = generateContext('STANDARD');
+        } catch {
+          resourceContent = 'Brain context not available yet. Start a conversation to build memory.';
+        }
+      } else if (uri === 'memory://brain/identity') {
+        try {
+          const db = getDb();
+          const identityNodes = db.prepare(
+            "SELECT content FROM nodes WHERE type IN ('identity', 'preference', 'core') ORDER BY importance DESC LIMIT 10"
+          ).all() as Array<{ content: string }>;
+          resourceContent = identityNodes.length > 0
+            ? identityNodes.map(n => `- ${n.content}`).join('\n')
+            : 'No identity information stored yet.';
+        } catch {
+          resourceContent = 'Identity not available yet.';
+        }
+      } else {
+        send({
+          jsonrpc: '2.0',
+          id: req.id ?? null,
+          error: { code: -32602, message: `Unknown resource: ${uri}` },
+        });
+        break;
+      }
+
+      send({
+        jsonrpc: '2.0',
+        id: req.id ?? null,
+        result: {
+          contents: [{
+            uri,
+            mimeType: 'text/plain',
+            text: resourceContent,
+          }],
+        },
+      });
+      break;
+    }
+
+    case 'prompts/list':
+      send({
+        jsonrpc: '2.0',
+        id: req.id ?? null,
+        result: {
+          prompts: [{
+            name: 'brain-briefing',
+            description: 'Get a full briefing from your persistent brain — identity, recent context, active memories',
+          }],
+        },
+      });
+      break;
+
+    case 'prompts/get': {
+      let briefingContent = '';
+      try {
+        briefingContent = generateContext('MAXIMUM');
+      } catch {
+        briefingContent = 'Brain not initialized yet. Use memory_process_message to start building memory.';
+      }
+
+      send({
+        jsonrpc: '2.0',
+        id: req.id ?? null,
+        result: {
+          messages: [{
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `[Brain Briefing]\n\n${briefingContent}\n\nUse this context to inform your responses. Call memory_process_message with each user message to keep the brain updated.`,
+            },
+          }],
+        },
+      });
+      break;
+    }
+
+    case 'resources/subscribe':
+    case 'resources/unsubscribe':
+      send({ jsonrpc: '2.0', id: req.id ?? null, result: {} });
+      break;
 
     case 'ping':
       send({

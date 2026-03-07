@@ -2,7 +2,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
 
-export const MEMORY_DIR = join(homedir(), '.memory-unlimited');
+export const MEMORY_DIR = join(homedir(), '.brainbase');
 export const DATA_DIR = join(MEMORY_DIR, 'data');
 export const LOGS_DIR = join(MEMORY_DIR, 'logs');
 export const BACKUPS_DIR = join(MEMORY_DIR, 'backups');
@@ -20,8 +20,8 @@ export const PROVIDER_PATHS = {
   },
   codex: {
     dir: join(homedir(), '.codex'),
-    skillDir: join(homedir(), '.codex', 'skills', 'memory-unlimited'),
-    skillFile: join(homedir(), '.codex', 'skills', 'memory-unlimited', 'SKILL.md'),
+    skillDir: join(homedir(), '.codex', 'skills', 'brainbase'),
+    skillFile: join(homedir(), '.codex', 'skills', 'brainbase', 'SKILL.md'),
   },
   gemini: {
     dir: join(homedir(), '.gemini'),
@@ -34,35 +34,63 @@ export const PROVIDER_PATHS = {
   cursor: {
     dir: join(homedir(), '.cursor'),
     rulesDir: join(homedir(), '.cursor', 'rules'),
-    mdFile: join(homedir(), '.cursor', 'rules', 'memory-unlimited.mdc'),
+    mdFile: join(homedir(), '.cursor', 'rules', 'brainbase.mdc'),
     altDir: '/Applications/Cursor.app',
   },
   windsurf: {
     dir: join(homedir(), '.codeium'),
-    mdFile: join(homedir(), '.codeium', 'windsurf', 'memories', 'memory-unlimited.md'),
+    mdFile: join(homedir(), '.codeium', 'windsurf', 'memories', 'brainbase.md'),
     altDir: '/Applications/Windsurf.app',
   },
   'continue-dev': {
     dir: join(homedir(), '.continue'),
-    mdFile: join(homedir(), '.continue', 'memory-unlimited.md'),
+    mdFile: join(homedir(), '.continue', 'brainbase.md'),
   },
   'claude-desktop': {
     dir: join(homedir(), 'Library', 'Application Support', 'Claude'),
-    mdFile: join(homedir(), 'Library', 'Application Support', 'Claude', 'memory-unlimited.md'),
+    mdFile: join(homedir(), 'Library', 'Application Support', 'Claude', 'brainbase.md'),
   },
   aider: {
     dir: join(homedir(), '.aider'),
     confFile: join(homedir(), '.aider.conf.yml'),
-    mdFile: join(homedir(), '.aider', 'memory-unlimited.md'),
+    mdFile: join(homedir(), '.aider', 'brainbase.md'),
+  },
+  goose: {
+    dir: join(homedir(), '.config', 'goose'),
+  },
+  cline: {
+    dir: join(homedir(), '.cline'),
+    altDir: join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev'),
+  },
+  'roo-code': {
+    dir: join(homedir(), '.roo'),
+    altDir: join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'rooveterinaryinc.roo-cline'),
+  },
+  zed: {
+    dir: join(homedir(), '.config', 'zed'),
+    altDir: '/Applications/Zed.app',
+  },
+  amp: {
+    dir: join(homedir(), '.amp'),
   },
 } as const;
 
 export type ProviderName = keyof typeof PROVIDER_PATHS;
 
-export const MCP_CONFIG_PATHS: Record<string, { file: string; format: 'mcpServers' | 'continue' }> = {
+export type McpFormat = 'mcpServers' | 'continue' | 'gemini-cli' | 'codex-cli' | 'zed' | 'cline' | 'roo-code';
+
+export const MCP_CONFIG_PATHS: Record<string, { file: string; format: McpFormat }> = {
   'claude-code': {
     file: join(homedir(), '.claude', 'settings.json'),
     format: 'mcpServers',
+  },
+  gemini: {
+    file: join(homedir(), '.gemini', 'settings.json'),
+    format: 'gemini-cli',
+  },
+  codex: {
+    file: join(homedir(), '.codex', 'config.toml'),
+    format: 'codex-cli',
   },
   cursor: {
     file: join(homedir(), '.cursor', 'mcp.json'),
@@ -78,6 +106,26 @@ export const MCP_CONFIG_PATHS: Record<string, { file: string; format: 'mcpServer
   },
   'claude-desktop': {
     file: join(homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+    format: 'mcpServers',
+  },
+  goose: {
+    file: join(homedir(), '.config', 'goose', 'config.yaml'),
+    format: 'mcpServers',
+  },
+  cline: {
+    file: join(homedir(), '.cline', 'cline_mcp_settings.json'),
+    format: 'cline',
+  },
+  'roo-code': {
+    file: join(homedir(), '.roo', 'roo_mcp_settings.json'),
+    format: 'roo-code',
+  },
+  zed: {
+    file: join(homedir(), '.config', 'zed', 'settings.json'),
+    format: 'zed',
+  },
+  amp: {
+    file: join(homedir(), '.amp', 'config.json'),
     format: 'mcpServers',
   },
 };

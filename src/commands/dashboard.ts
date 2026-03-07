@@ -156,7 +156,7 @@ export const dashboardCommand = new Command('dashboard')
     });
 
     server.listen(port, () => {
-      console.log(`\n  Memory Unlimited - Brain Dashboard\n`);
+      console.log(`\n  BrainBase - Brain Dashboard\n`);
       console.log(`  http://localhost:${port}\n`);
       console.log(`  Press Ctrl+C to stop.\n`);
     });

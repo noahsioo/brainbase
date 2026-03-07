@@ -5,7 +5,7 @@ import { runConsolidation } from '../consolidation/consolidation-runner.js';
 export const consolidateCommand = new Command('consolidate')
   .description('Run full consolidation pipeline (pruning, merging, abstraction, dream, distill)')
   .action(async () => {
-    console.log(chalk.bold('\n  Memory Unlimited - Consolidation Pipeline\n'));
+    console.log(chalk.bold('\n  BrainBase - Consolidation Pipeline\n'));
     console.log('  Running full sleep-cycle consolidation...\n');
 
     const result = await runConsolidation();

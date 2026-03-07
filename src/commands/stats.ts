@@ -9,7 +9,7 @@ export const statsCommand = new Command('stats')
   .action(() => {
     const stats = getStats();
 
-    console.log(chalk.bold('\n  Memory Unlimited - Brain Statistics\n'));
+    console.log(chalk.bold('\n  BrainBase - Brain Statistics\n'));
     const activeNodes = getActivatedNodes();
 
     console.log(`  Total Nodes:     ${chalk.cyan(stats.totalNodes.toString())}`);

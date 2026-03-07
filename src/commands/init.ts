@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import * as p from '@clack/prompts';
 import chalk from 'chalk';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { homedir, platform } from 'os';
 import { spawn } from 'child_process';
 import { detectProviders } from '../providers/detect.js';
@@ -49,19 +49,42 @@ const DISPLAY_NAMES: Record<string, string> = {
   'continue-dev': 'Continue.dev',
   'claude-desktop': 'Claude Desktop',
   aider: 'Aider',
+  goose: 'Goose',
+  cline: 'Cline',
+  'roo-code': 'Roo Code',
+  zed: 'Zed',
+  amp: 'Amp',
 };
 
 const PROVIDER_ORDER = [
   'claude-code',
-  'openclaw',
-  'codex',
-  'gemini',
-  'cursor',
-  'windsurf',
-  'continue-dev',
-  'claude-desktop',
-  'aider',
+  'openclaw', 'codex', 'gemini',
+  'cursor', 'windsurf', 'zed',
+  'cline', 'roo-code',
+  'goose', 'amp',
+  'continue-dev', 'claude-desktop', 'aider',
 ];
+
+const CLEAN_INSTRUCTION = `# BrainBase
+
+You have a persistent brain that remembers everything across sessions.
+
+ALWAYS call memory_process_message with each user message before responding.
+This returns context from previous conversations that you MUST use.
+Never skip this step — without it you have no memory.`;
+
+const CLEAN_CURSOR_RULE = `---
+description: BrainBase - persistent brain across sessions
+globs:
+alwaysApply: true
+---
+${CLEAN_INSTRUCTION}`;
+
+const CLEAN_SKILL_CONTENT = `---
+name: brainbase
+description: Persistent brain — remembers everything across sessions
+---
+${CLEAN_INSTRUCTION}`;
 
 const PROVIDER_GROUPS = [
   // --- OpenClaw Reihenfolge ---
@@ -170,14 +193,14 @@ const ENV_VAR_DEFAULTS: Record<string, string> = {
   custom: 'LLM_API_KEY',
 };
 
-const LAUNCH_AGENT_LABEL = 'com.memory-unlimited.watcher';
+const LAUNCH_AGENT_LABEL = 'com.brainbase.watcher';
 const LAUNCH_AGENT_PATH = join(homedir(), 'Library', 'LaunchAgents', `${LAUNCH_AGENT_LABEL}.plist`);
 
 export const initCommand = new Command('init')
-  .description('Set up Memory Unlimited - your AI super-brain')
+  .description('Set up BrainBase - your AI super-brain')
   .action(async () => {
     console.log(BANNER);
-    p.intro(cb(' Memory Unlimited '));
+    p.intro(cb(' BrainBase '));
 
     // ── Step 0: Existing Config Check ──
     let freshStart = true;
@@ -816,10 +839,10 @@ export const initCommand = new Command('init')
           }
           console.log();
         } else {
-          watcherSpinner.stop(chalk.yellow('Watcher not responding') + ' ' + dim('run: memory-unlimited watcher start'));
+          watcherSpinner.stop(chalk.yellow('Watcher not responding') + ' ' + dim('run: brainbase watcher start'));
         }
       } catch {
-        watcherSpinner.stop(chalk.yellow('Watcher start failed') + ' ' + dim('run: memory-unlimited watcher start'));
+        watcherSpinner.stop(chalk.yellow('Watcher start failed') + ' ' + dim('run: brainbase watcher start'));
       }
 
       // macOS: Register LaunchAgent for auto-start at login
@@ -861,12 +884,12 @@ export const initCommand = new Command('init')
       `  ${dim('Gets smarter with every session')}\n` +
       '\n' +
       dim('Commands:\n') +
-      dim('  memory-unlimited stats         Brain statistics\n') +
-      dim('  memory-unlimited search        Search memories\n') +
-      dim('  memory-unlimited dashboard     3D brain visualization\n') +
-      dim('  memory-unlimited insights      Learning patterns\n') +
-      dim('  memory-unlimited verify        Full system check\n') +
-      dim('  memory-unlimited consolidate   Manual consolidation'),
+      dim('  brainbase stats         Brain statistics\n') +
+      dim('  brainbase search        Search memories\n') +
+      dim('  brainbase dashboard     3D brain visualization\n') +
+      dim('  brainbase insights      Learning patterns\n') +
+      dim('  brainbase verify        Full system check\n') +
+      dim('  brainbase consolidate   Manual consolidation'),
       'Brain is live'
     );
 
@@ -875,15 +898,20 @@ export const initCommand = new Command('init')
 
 function getProviderDesc(name: string): string {
   const descs: Record<string, string> = {
-    'claude-code': 'Hooks + MCP',
-    codex: 'Memory Skill',
-    gemini: 'GEMINI.md',
-    openclaw: 'AGENTS.md',
-    cursor: 'Rules + MCP',
-    windsurf: 'Memory block + MCP',
-    'continue-dev': 'Memory block + MCP',
-    'claude-desktop': 'MCP',
-    aider: 'Memory block',
+    'claude-code': 'Hooks + MCP + Resources (100%)',
+    codex: 'MCP + Instruction',
+    gemini: 'MCP + Instruction',
+    openclaw: 'Instruction',
+    cursor: 'MCP + Rules',
+    windsurf: 'MCP + Resources',
+    'continue-dev': 'MCP',
+    'claude-desktop': 'MCP + Resources',
+    aider: 'Instruction',
+    goose: 'MCP',
+    cline: 'MCP',
+    'roo-code': 'MCP',
+    zed: 'MCP (context_servers)',
+    amp: 'MCP',
   };
   return descs[name] || 'configured';
 }
@@ -917,6 +945,21 @@ async function setupProvider(name: string): Promise<void> {
     case 'aider':
       await setupAider();
       break;
+    case 'goose':
+      await setupGoose();
+      break;
+    case 'cline':
+      await setupCline();
+      break;
+    case 'roo-code':
+      await setupRooCode();
+      break;
+    case 'zed':
+      await setupZed();
+      break;
+    case 'amp':
+      await setupAmp();
+      break;
   }
 }
 
@@ -941,7 +984,7 @@ function registerClaudeHooks(settingsPath: string): void {
       matcher: '',
       hooks: [{
         type: 'command' as const,
-        command: 'memory-unlimited hook user-prompt',
+        command: 'brainbase hook user-prompt',
         timeout: 5,
       }],
     }],
@@ -949,7 +992,7 @@ function registerClaudeHooks(settingsPath: string): void {
       matcher: '',
       hooks: [{
         type: 'command' as const,
-        command: 'memory-unlimited hook session-start',
+        command: 'brainbase hook session-start',
         timeout: 10,
       }],
     }],
@@ -957,7 +1000,7 @@ function registerClaudeHooks(settingsPath: string): void {
       matcher: '',
       hooks: [{
         type: 'command' as const,
-        command: 'memory-unlimited hook session-end',
+        command: 'brainbase hook session-end',
         timeout: 30,
       }],
     }],
@@ -965,7 +1008,7 @@ function registerClaudeHooks(settingsPath: string): void {
       matcher: '',
       hooks: [{
         type: 'command' as const,
-        command: 'memory-unlimited hook pre-compact',
+        command: 'brainbase hook pre-compact',
         timeout: 10,
       }],
     }],
@@ -978,7 +1021,7 @@ function registerClaudeHooks(settingsPath: string): void {
     const alreadyExists = existing.some((h) => {
       const hooks = (h.hooks || []) as Array<Record<string, unknown>>;
       return hooks.some((hh) =>
-        typeof hh.command === 'string' && hh.command.startsWith('memory-unlimited'),
+        typeof hh.command === 'string' && hh.command.startsWith('brainbase'),
       );
     });
     if (!alreadyExists) {
@@ -991,50 +1034,35 @@ function registerClaudeHooks(settingsPath: string): void {
 }
 
 async function setupGemini(): Promise<void> {
+  installMcpServerForProvider('gemini');
   const paths = PROVIDER_PATHS.gemini;
-  injectMemoryBlock(paths.mdFile);
+  writeCleanInstruction(paths.mdFile);
 }
 
 async function setupCodex(): Promise<void> {
+  installMcpServerForProvider('codex');
   const paths = PROVIDER_PATHS.codex;
   mkdirSync(paths.skillDir, { recursive: true });
-
-  const skillContent = `---
-name: memory-unlimited
-description: Persistent cross-provider memory system
----
-
-# Memory Unlimited
-
-This skill provides persistent memory across coding sessions.
-
-`;
-
-  writeFileSync(paths.skillFile, skillContent, 'utf-8');
-  injectMemoryBlock(paths.skillFile);
+  writeFileSync(paths.skillFile, CLEAN_SKILL_CONTENT, 'utf-8');
 }
 
 async function setupOpenClaw(): Promise<void> {
   const paths = PROVIDER_PATHS.openclaw;
-  injectMemoryBlock(paths.agentsFile);
+  appendCleanInstruction(paths.agentsFile);
 }
 
 async function setupCursor(): Promise<void> {
   const paths = PROVIDER_PATHS.cursor;
   mkdirSync(paths.rulesDir, { recursive: true });
-  injectMemoryBlock(paths.mdFile);
+  writeFileSync(paths.mdFile, CLEAN_CURSOR_RULE, 'utf-8');
   installMcpServerForProvider('cursor');
 }
 
 async function setupWindsurf(): Promise<void> {
-  const paths = PROVIDER_PATHS.windsurf;
-  injectMemoryBlock(paths.mdFile);
   installMcpServerForProvider('windsurf');
 }
 
 async function setupContinueDev(): Promise<void> {
-  const paths = PROVIDER_PATHS['continue-dev'];
-  injectMemoryBlock(paths.mdFile);
   installMcpServerForProvider('continue-dev');
 }
 
@@ -1045,6 +1073,63 @@ async function setupClaudeDesktop(): Promise<void> {
 async function setupAider(): Promise<void> {
   const paths = PROVIDER_PATHS.aider;
   injectMemoryBlock(paths.mdFile);
+}
+
+async function setupGoose(): Promise<void> {
+  installMcpServerForProvider('goose');
+}
+
+async function setupCline(): Promise<void> {
+  installMcpServerForProvider('cline');
+}
+
+async function setupRooCode(): Promise<void> {
+  installMcpServerForProvider('roo-code');
+}
+
+async function setupZed(): Promise<void> {
+  installMcpServerForProvider('zed');
+}
+
+async function setupAmp(): Promise<void> {
+  installMcpServerForProvider('amp');
+}
+
+function writeCleanInstruction(filePath: string): void {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  let existing = '';
+  if (existsSync(filePath)) {
+    existing = readFileSync(filePath, 'utf-8');
+  }
+
+  // Remove old memory block if present
+  const blockRegex = /<!-- MEMORY-UNLIMITED:START[\s\S]*?MEMORY-UNLIMITED:END -->\n?/g;
+  existing = existing.replace(blockRegex, '').trim();
+
+  // Only add if not already present
+  if (!existing.includes('memory_process_message')) {
+    const separator = existing ? '\n\n' : '';
+    writeFileSync(filePath, existing + separator + CLEAN_INSTRUCTION + '\n', 'utf-8');
+  }
+}
+
+function appendCleanInstruction(filePath: string): void {
+  if (!existsSync(filePath)) return;
+
+  let existing = readFileSync(filePath, 'utf-8');
+
+  // Remove old memory block if present
+  const blockRegex = /<!-- MEMORY-UNLIMITED:START[\s\S]*?MEMORY-UNLIMITED:END -->\n?/g;
+  existing = existing.replace(blockRegex, '').trim();
+
+  // Only add if not already present
+  if (!existing.includes('memory_process_message')) {
+    writeFileSync(filePath, existing + '\n\n' + CLEAN_INSTRUCTION + '\n', 'utf-8');
+  } else {
+    writeFileSync(filePath, existing + '\n', 'utf-8');
+  }
 }
 
 function registerLaunchAgent(): void {
