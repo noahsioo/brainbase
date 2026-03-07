@@ -26,6 +26,12 @@
 
 ---
 
+<p align="center">
+  <video src="assets/github-video.mp4" width="700" controls></video>
+</p>
+
+---
+
 ## The problem
 
 Every AI starts from zero. Every session. Every time.
