@@ -709,15 +709,16 @@ const TYPE_COLORS = {
   prospective: 0xFBBF24, tacit: 0xC084FC,
   entity: 0x06B6D4, episode: 0xF472B6,
   example: 0x34D399, skill: 0xFB923C,
-  insight: 0xE879F9,
+  insight: 0xE879F9, learning: 0x60A5FA,
+  style_dna: 0xF59E0B,
 };
 
 function hashColor(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h);
   const hue = ((h % 360) + 360) % 360;
-  const s = 65 + (h % 20);
-  const l = 55 + (h % 15);
+  const s = 75 + (h % 15);
+  const l = 55 + (h % 12);
   const c = (1 - Math.abs(2 * l / 100 - 1)) * s / 100;
   const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
   const m = l / 100 - c / 2;
