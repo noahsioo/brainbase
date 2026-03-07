@@ -205,7 +205,7 @@ This isn't a database that waits for queries. BrainBase runs continuously:
 
 ## Dashboard
 
-Oh yeah, we also built a dashboard. Because why not. 🧠
+Oh yeah, I also built a dashboard. Because why not. 🧠
 
 <p align="center">
   <video src="https://github.com/user-attachments/assets/faf0e7af-a8eb-44b9-8317-c011530fca3b" width="700" controls></video>
