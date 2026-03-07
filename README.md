@@ -38,9 +38,9 @@ BrainBase is not a memory plugin. It's an actual brain.
 
 Not metaphorically. 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — translated into code. **92 mechanisms. 18,000 lines of TypeScript. Built in 24 days by a 17-year-old.**
 
-The AI you use (Claude, Cursor, Codex, Gemini — any of them) is just the mouth. It vibrates, it produces words. But the *brain* behind it? That's BrainBase. Same personality, same memories, same knowledge — no matter which AI you talk through.
+The AI you use (OpenClaw, Claude Code, Cursor, Codex, Gemini — any of them) is just the mouth. It vibrates, it produces words. But the *brain* behind it? That's BrainBase. Same personality, same memories, same knowledge — no matter which AI you talk through.
 
-Switch from Claude to Cursor mid-project. BrainBase doesn't care. It knows you. It knows your project. It picks up where you left off.
+Switch from OpenClaw to Cursor mid-project. BrainBase doesn't care. It knows you. It knows your project. It picks up where you left off.
 
 **One brain. Every AI. Local. Private. Free.**
 
@@ -106,8 +106,8 @@ Works with any AI that supports hooks or MCP:
 
 | Provider | Integration | Status |
 |----------|------------|--------|
-| **Claude Code** | Hooks (SessionStart, UserPrompt, SessionEnd, PreCompact) | Full |
 | **OpenClaw** | AGENTS.md | Full |
+| **Claude Code** | Hooks (SessionStart, UserPrompt, SessionEnd, PreCompact) | Full |
 | **Cursor** | MCP Server | Full |
 | **Windsurf** | MCP Server | Full |
 | **Codex CLI** | Skills + Config | Full |
