@@ -1,6 +1,6 @@
 # Security Policy
 
-If you believe you've found a security issue in BrainBase, please report it privately.
+Found a security issue? First of all — thank you. Seriously. Please report it privately so I can fix it before it becomes a problem.
 
 ## Reporting
 
