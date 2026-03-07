@@ -1,30 +1,30 @@
 # Security Policy
 
-## Reporting a vulnerability
+If you believe you've found a security issue in BrainBase, please report it privately.
 
-If you discover a security vulnerability in BrainBase, please report it responsibly.
+## Reporting
 
-**Do not open a public GitHub issue.**
+Use [GitHub's private vulnerability reporting](https://github.com/noahsioo/brainbase/security/advisories/new) — this is the fastest way.
 
-Instead, email: **security@brainbase.dev**
+If that doesn't work for you, email **security@brainbase.dev** and I'll take it from there.
 
-Include:
-- Description of the vulnerability
+## What to include
+
+- What you found
 - Steps to reproduce
-- Potential impact
-- Suggested fix (if you have one)
+- How serious you think it is
+- A suggested fix (if you have one)
 
-## Response time
-
-You'll receive an acknowledgment within 48 hours. A fix or mitigation will be prioritized based on severity.
+Reports without reproduction steps will take longer to process.
 
 ## Scope
 
-BrainBase runs 100% locally. The main security concerns are:
-- Data leakage through context injection
-- Unauthorized access to the local knowledge graph
-- Vulnerabilities in the watcher daemon (HTTP port 7899)
-- MCP server security
+BrainBase runs 100% locally. The main areas to look at:
+
+- Watcher daemon (HTTP port 7899)
+- MCP server (stdio JSON-RPC)
+- Knowledge graph access
+- Context injection / data leakage
 
 ## Supported versions
 
