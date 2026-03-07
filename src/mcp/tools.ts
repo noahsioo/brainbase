@@ -1,6 +1,5 @@
-import { searchNodes, addNode, getStats, type Node } from '../memory/store.js';
+import { searchNodes, addNode, getStats, getDb, createSession, type Node } from '../memory/store.js';
 import { activateByQuery, getActivatedNodes, autoLinkNodes } from '../memory/activation.js';
-import { generateContext, type DetailMode } from '../memory/context-generator.js';
 import { processMessage } from '../hooks/user-prompt.js';
 import { createProspectiveMemory } from '../memory/prospective.js';
 import { isPaused } from '../config.js';
@@ -190,7 +189,7 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
       case 'memory_search':
         return handleSearch(args);
       case 'memory_context':
-        return handleContext(args);
+        return await handleContext(args);
       case 'memory_add':
         return handleAdd(args);
       case 'memory_status':
@@ -235,12 +234,25 @@ function handleSearch(args: Record<string, unknown>): ToolResult {
   return { content: [{ type: 'text', text }] };
 }
 
-function handleContext(args: Record<string, unknown>): ToolResult {
-  const mode = (args.mode as DetailMode) || 'STANDARD';
+async function handleContext(args: Record<string, unknown>): Promise<ToolResult> {
   const topic = args.topic as string | undefined;
-  const provider = args.provider as string | undefined;
-  const context = generateContext(mode, topic, undefined, undefined, undefined, undefined, provider);
-  return { content: [{ type: 'text', text: context }] };
+  const provider = (args.provider as string) || 'mcp';
+  const sessionId = (args.session_id as string) || `mcp-${Date.now()}`;
+
+  const db = getDb();
+  const existing = db.prepare('SELECT id FROM sessions WHERE id = ? AND ended_at IS NULL').get(sessionId);
+  if (!existing) {
+    createSession(provider, sessionId);
+  }
+
+  const result = await processMessage({
+    message: topic || 'context request',
+    provider,
+    session_id: sessionId,
+    context_only: true,
+  });
+
+  return { content: [{ type: 'text', text: result.context || 'No context available.' }] };
 }
 
 function handleAdd(args: Record<string, unknown>): ToolResult {

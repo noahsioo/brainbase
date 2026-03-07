@@ -39,6 +39,7 @@ export interface ProcessMessageInput {
   message: string;
   session_id?: string;
   provider?: string;
+  context_only?: boolean;
 }
 
 export interface ProcessMessageResult {
@@ -149,19 +150,21 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   const sessionId = input.session_id || `session-${Date.now()}`;
   const provider = input.provider || 'mcp';
 
-  addToRawBuffer({
-    session_id: sessionId,
-    provider,
-    role: 'user',
-    content: input.message,
-    timestamp: Date.now(),
-  });
+  if (!input.context_only) {
+    addToRawBuffer({
+      session_id: sessionId,
+      provider,
+      role: 'user',
+      content: input.message,
+      timestamp: Date.now(),
+    });
 
-  getDb().prepare('UPDATE sessions SET message_count = message_count + 1 WHERE id = ?').run(sessionId);
+    getDb().prepare('UPDATE sessions SET message_count = message_count + 1 WHERE id = ?').run(sessionId);
 
-  updateMetaProfile(input.message);
-  trackExpertise(input.message);
-  trackProblem(input.message, sessionId);
+    updateMetaProfile(input.message);
+    trackExpertise(input.message);
+    trackProblem(input.message, sessionId);
+  }
 
   // 10.3: Emotion-Bypass (Olfaktion — umgeht Thalamus direkt)
   const emotionBypass = detectEmotionBypass(input.message);
@@ -351,24 +354,26 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     }
   } catch { /* non-fatal */ }
 
-  extractFromPrompt(input.message, sessionId, signal.flags);
+  if (!input.context_only) {
+    extractFromPrompt(input.message, sessionId, signal.flags);
 
-  // 9.4: Active Information Seeking — detect learning opportunities
-  const learningTopics = detectLearningOpportunity(input.message, signal.entities);
-  if (learningTopics.length > 0) {
-    const dbLT = getDb();
-    for (const topic of learningTopics) {
-      dbLT.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-        .run(`hunger_boost_${topic}`, '1', Date.now());
+    // 9.4: Active Information Seeking — detect learning opportunities
+    const learningTopics = detectLearningOpportunity(input.message, signal.entities);
+    if (learningTopics.length > 0) {
+      const dbLT = getDb();
+      for (const topic of learningTopics) {
+        dbLT.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+          .run(`hunger_boost_${topic}`, '1', Date.now());
+      }
     }
-  }
 
-  // 9.3: Dopamin-Reward — if user provides info about a hungry zone
-  const previousZones = getHungerZones();
-  if (previousZones.length > 0 && feedback !== 'negative') {
-    for (const zone of previousZones) {
-      if (input.message.toLowerCase().includes(zone.entity.toLowerCase())) {
-        applyDopaminReward(zone.entity);
+    // 9.3: Dopamin-Reward — if user provides info about a hungry zone
+    const previousZones = getHungerZones();
+    if (previousZones.length > 0 && feedback !== 'negative') {
+      for (const zone of previousZones) {
+        if (input.message.toLowerCase().includes(zone.entity.toLowerCase())) {
+          applyDopaminReward(zone.entity);
+        }
       }
     }
   }
@@ -473,7 +478,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   }
 
   let watcherSystemMessage: string | undefined;
-  if (signal.combined >= GATE_LLM) {
+  if (!input.context_only && signal.combined >= GATE_LLM) {
     const config = getConfig();
     if (config.watcher_engine !== 'none' && config.watcher_engine !== 'session') {
       const db = getDb();
@@ -503,13 +508,15 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   ).get(sessionId) as { message_count: number } | undefined;
   const messageCount = sessionRow?.message_count ?? 0;
 
-  if (messageCount % 5 === 0 || messageCount <= 1) {
-    updateHotMemoryInDb();
-  }
+  if (!input.context_only) {
+    if (messageCount % 5 === 0 || messageCount <= 1) {
+      updateHotMemoryInDb();
+    }
 
-  // 9.1: Detect hunger zones (every 3rd message to save perf)
-  if (messageCount % 3 === 0 || messageCount <= 1) {
-    detectHungerZones();
+    // 9.1: Detect hunger zones (every 3rd message to save perf)
+    if (messageCount % 3 === 0 || messageCount <= 1) {
+      detectHungerZones();
+    }
   }
 
   // M29: Dual Process — signal strength determines context depth, not message count
