@@ -12,6 +12,8 @@ export interface NodeMetadata {
   entity_type?: string;
   aliases?: string[];
   valence?: number;
+  evidence_count?: number;
+  memory_tier?: 'hippocampal' | 'cortical';
   encoding_context?: {
     session_topic?: string;
     mood?: string;
@@ -19,6 +21,17 @@ export interface NodeMetadata {
     message_index?: number;
   };
   unique_sessions?: string[];
+  visibility_tier?: 'active' | 'archive' | 'deep_archive';
+  source_details?: {
+    first_session: string;
+    last_confirmed: number;
+    confirmation_count: number;
+    contradicted_by?: string[];
+  };
+  contradiction_of?: string;
+  needs_confirmation?: boolean;
+  hub_protected?: boolean;
+  hub_edge_count?: number;
 }
 
 export interface Node {
@@ -422,6 +435,20 @@ export function updateNode(id: string, updates: Partial<Pick<Node, 'content' | '
   if (updates.content !== undefined) {
     db.prepare('DELETE FROM embeddings WHERE node_id = ?').run(id);
   }
+}
+
+// 11.1: Evidence Accumulation — repeated facts get stronger confidence
+export function incrementEvidence(nodeId: string): void {
+  const node = getNode(nodeId);
+  if (!node) return;
+  let meta: NodeMetadata = {};
+  try { meta = node.metadata ? JSON.parse(node.metadata) : {}; } catch { meta = {}; }
+  meta.evidence_count = (meta.evidence_count || 1) + 1;
+  const newConfidence = Math.min(1.0, 0.4 + (meta.evidence_count * 0.12));
+  updateNode(nodeId, {
+    confidence: Math.max(node.confidence, newConfidence),
+    metadata: JSON.stringify(meta),
+  });
 }
 
 export function deleteNode(id: string): boolean {

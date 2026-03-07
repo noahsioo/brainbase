@@ -108,6 +108,41 @@ export function isCriticalPeriod(): boolean {
   }
 }
 
+// 18.1: Entwicklungsphasen — Kind bis Weise
+export type DevelopmentPhase = 'infant' | 'child' | 'teen' | 'adult' | 'wise';
+
+export interface DevelopmentState {
+  phase: DevelopmentPhase;
+  session_count: number;
+  gate_multiplier: number;
+  quality_multiplier: number;
+  pruning_multiplier: number;
+  plasticity: number;
+  stability: number;
+}
+
+export function getDevelopmentPhase(): DevelopmentState {
+  const db = getDb();
+  let sessionCount = 0;
+  try {
+    const row = db.prepare("SELECT value FROM system_state WHERE key = 'sessions_count'")
+      .get() as { value: string } | undefined;
+    if (row) sessionCount = parseInt(row.value, 10);
+  } catch {}
+
+  if (sessionCount < 10) {
+    return { phase: 'infant', session_count: sessionCount, gate_multiplier: 0.5, quality_multiplier: 0.6, pruning_multiplier: 0.2, plasticity: 1.0, stability: 0.1 };
+  } else if (sessionCount < 50) {
+    return { phase: 'child', session_count: sessionCount, gate_multiplier: 0.7, quality_multiplier: 0.8, pruning_multiplier: 0.6, plasticity: 0.8, stability: 0.3 };
+  } else if (sessionCount < 200) {
+    return { phase: 'teen', session_count: sessionCount, gate_multiplier: 1.0, quality_multiplier: 1.0, pruning_multiplier: 1.0, plasticity: 0.6, stability: 0.5 };
+  } else if (sessionCount < 1000) {
+    return { phase: 'adult', session_count: sessionCount, gate_multiplier: 1.2, quality_multiplier: 1.2, pruning_multiplier: 1.3, plasticity: 0.4, stability: 0.8 };
+  } else {
+    return { phase: 'wise', session_count: sessionCount, gate_multiplier: 1.3, quality_multiplier: 1.3, pruning_multiplier: 1.5, plasticity: 0.3, stability: 0.9 };
+  }
+}
+
 export function incrementSessionCount(): number {
   const db = getDb();
   try {

@@ -2,9 +2,11 @@ import { createSession, getDb } from '../memory/store.js';
 import { generateContext } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
 import { decayAllActivations } from '../memory/activation.js';
-import { incrementSessionCount, isCriticalPeriod } from '../memory/cold-start.js';
+import { incrementSessionCount, isCriticalPeriod, getDevelopmentPhase } from '../memory/cold-start.js';
 import { getConfig } from '../config.js';
 import { buildPrediction, savePrediction } from '../signal/prediction.js';
+import { startNewSessionTrend } from '../regulation/allostasis.js';
+import { getScope } from '../memory/session-scope.js';
 
 interface SessionStartInput {
   session_id?: string;
@@ -14,12 +16,15 @@ interface SessionStartInput {
 export async function handleSessionStart(input: SessionStartInput): Promise<void> {
   try {
     decayAllActivations();
+    // 21.1: Neuer Session-Trend-Datenpunkt
+    try { startNewSessionTrend(); } catch { /* non-fatal */ }
 
     const sessionCount = incrementSessionCount();
     const critical = isCriticalPeriod();
     const sessionId = input.session_id || `session-${Date.now()}`;
 
     createSession('claude-code', sessionId);
+    getScope(sessionId);
 
     const prediction = buildPrediction();
     if (prediction) {
@@ -42,7 +47,12 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
 
     let systemMessage: string;
     if (context && context !== 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.') {
-      systemMessage = `[Memory System Active - Session #${sessionCount}${critical ? ' (Learning Mode)' : ''}]\n\n`;
+      // 18.2: Phase label statt binary Learning Mode
+      const devPhase = getDevelopmentPhase();
+      const phaseLabel: Record<string, string> = {
+        infant: 'Lernmodus', child: 'Wachstumsphase', teen: 'Spezialisierung', adult: 'Stabil', wise: 'Erfahren',
+      };
+      systemMessage = `[Memory System Active - Session #${sessionCount} (${phaseLabel[devPhase.phase]})]\n\n`;
       if (lastSummary) {
         systemMessage += `## Letzter Stand\n${lastSummary}\n\n`;
       }

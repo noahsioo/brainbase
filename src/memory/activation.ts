@@ -16,23 +16,68 @@ import type { NodeMetadata } from './store.js';
 import { getCurrentMood } from '../signal/echo.js';
 import { boostCoActivatedCluster } from '../learning/cluster-tracker.js';
 import { getEmbeddingCache, cosineSimilarity } from '../llm/embeddings.js';
+import { recordActivationPattern, completeEngrams } from './engrams.js';
+import { getDevelopmentPhase } from './cold-start.js';
+import { getMetaplasticLearningRate, getRetrogradeDampening } from '../regulation/feedback-channels.js';
+import { getHubDecayFactor } from '../regulation/hub-protection.js';
+import { getScope } from './session-scope.js';
 
-// M36: Current encoding context for retrieval matching
-let _currentEncodingContext: {
-  mood?: string;
-  topic?: string;
-  provider?: string;
-} | null = null;
-
-export function setCurrentEncodingContext(ctx: typeof _currentEncodingContext): void {
-  _currentEncodingContext = ctx;
+// M36: Current encoding context for retrieval matching (session-scoped)
+export function setCurrentEncodingContext(ctx: { mood?: string; topic?: string; provider?: string } | null, sessionId: string): void {
+  getScope(sessionId).encodingContext = ctx;
 }
 
-// M52: Gehirnwellen/Modi — system mode modulates activation parameters
-let _systemMode: 'gamma' | 'beta' | 'theta' = 'beta';
+// M52: Gehirnwellen/Modi — system mode modulates activation parameters (session-scoped)
+export function setSystemMode(mode: 'gamma' | 'beta' | 'theta', sessionId: string): void {
+  getScope(sessionId).systemMode = mode;
+}
 
-export function setSystemMode(mode: 'gamma' | 'beta' | 'theta'): void {
-  _systemMode = mode;
+// 22.5: Adaptive Coding — Edge-Gewichte je nach TaskMode
+const MODE_EDGE_WEIGHTS: Record<string, Record<string, number>> = {
+  debugging: { uses: 1.3, solved_by: 1.5, caused_by: 1.3, likes: 0.5, interested_in: 0.5 },
+  building:  { uses: 1.2, depends_on: 1.3, part_of: 1.2, likes: 0.7 },
+  learning:  { is_a: 1.3, part_of: 1.2, knows: 1.2, uses: 0.8 },
+  exploring: { interested_in: 1.3, similar_to: 1.2, related_to: 1.2 },
+  chatting:  { likes: 1.3, dislikes: 1.2, prefers: 1.2, uses: 0.7 },
+};
+
+export function setCurrentTaskMode(mode: string, sessionId: string): void {
+  getScope(sessionId).taskMode = mode;
+}
+
+// 23.1: Disinhibition — gezielt Nodes aus Unterdrueckung holen (session-scoped)
+export function setDisinhibitionTargets(targets: string[], sessionId: string): void {
+  getScope(sessionId).disinhibitionTargets = new Set(targets);
+}
+
+export function clearDisinhibitionTargets(sessionId: string): void {
+  getScope(sessionId).disinhibitionTargets.clear();
+}
+
+export function applyDisinhibition(query: string, sessionId: string): void {
+  const db = getDb();
+  const scope = getScope(sessionId);
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  if (words.length === 0) return;
+
+  const archived = db.prepare(`
+    SELECT id, content FROM nodes
+    WHERE metadata LIKE '%archive%'
+    LIMIT 50
+  `).all() as Array<{ id: string; content: string }>;
+
+  for (const node of archived) {
+    const contentLower = node.content.toLowerCase();
+    const matches = words.filter(w => contentLower.includes(w)).length;
+    if (matches >= 2 || (matches >= 1 && words.length <= 2)) {
+      scope.disinhibitionTargets.add(node.id);
+    }
+  }
+}
+
+// 23.2: Coherence Groups — Nodes die im gleichen Zyklus aktiviert wurden (session-scoped)
+export function startNewCoherenceRound(sessionId: string): void {
+  getScope(sessionId).coherenceGroup.clear();
 }
 
 const SPREAD_FACTOR = 0.5;
@@ -47,6 +92,36 @@ const RECENCY_BOOST = 0.2;
 const EMOTIONAL_BIAS_BOOST = 0.15;
 const HEBBIAN_INCREMENT = 0.05;
 const HEBBIAN_DECAY = 0.01;
+
+// 16.3: STP — Kurzzeit-Plastizitaet (lebt nur im Memory, nicht in DB)
+const _recentEdgeFirings: Map<string, { count: number; lastFired: number }> = new Map();
+const STP_WINDOW = 60 * 1000;
+
+function getSTPModifier(edgeId: string): number {
+  const entry = _recentEdgeFirings.get(edgeId);
+  if (!entry) return 1.0;
+  const elapsed = Date.now() - entry.lastFired;
+  if (elapsed > STP_WINDOW) {
+    _recentEdgeFirings.delete(edgeId);
+    return 1.0;
+  }
+  if (entry.count <= 3) {
+    return 1.0 + entry.count * 0.1;
+  } else {
+    return Math.max(0.6, 1.3 - (entry.count - 3) * 0.15);
+  }
+}
+
+function recordEdgeFiring(edgeId: string): void {
+  const entry = _recentEdgeFirings.get(edgeId);
+  const now = Date.now();
+  if (entry && now - entry.lastFired < STP_WINDOW) {
+    entry.count++;
+    entry.lastFired = now;
+  } else {
+    _recentEdgeFirings.set(edgeId, { count: 1, lastFired: now });
+  }
+}
 
 export const EDGE_TYPES = [
   'related_to',
@@ -90,11 +165,35 @@ export interface ActivationResult {
   inhibited: number;
 }
 
-export function activateNode(nodeId: string, energy = 1.0): ActivationResult {
+export function activateNode(nodeId: string, energy = 1.0, sessionId = 'default'): ActivationResult {
   const node = getNode(nodeId);
   if (!node) return { activated: [], edges: [], inhibited: 0 };
 
+  // 19.1: Skip archived nodes — they exist but shouldn't activate
+  if (node.metadata) {
+    try {
+      const meta = JSON.parse(node.metadata);
+      if (meta.visibility_tier === 'archive' || meta.visibility_tier === 'deep_archive') {
+        // 23.1: Disinhibition — explizite Anfrage kann Archive oeffnen
+        if (!getScope(sessionId).disinhibitionTargets.has(nodeId)) {
+          return { activated: [], edges: [], inhibited: 0 };
+        }
+      }
+    } catch { /* skip */ }
+  }
+
   const now = Date.now();
+
+  // 16.1: Refraktaerzeit — kuerzlich stark aktivierte Nodes sind gedaempft
+  const timeSinceLastActivation = now - (node.last_activated || 0);
+  const REFRACTORY_WINDOW = 30 * 1000;
+  let refractoryDampen = 1.0;
+  if (timeSinceLastActivation < REFRACTORY_WINDOW && node.activation > 0.5) {
+    const timeFactor = timeSinceLastActivation / REFRACTORY_WINDOW;
+    const strengthFactor = (node.activation - 0.5) * 2;
+    refractoryDampen = 0.3 + 0.7 * timeFactor;
+    refractoryDampen = Math.min(1.0, refractoryDampen + (1 - strengthFactor) * 0.3);
+  }
 
   let boost = 0;
   if (now - node.last_activated < RECENCY_WINDOW_MS) {
@@ -107,6 +206,7 @@ export function activateNode(nodeId: string, energy = 1.0): ActivationResult {
   }
 
   // M36: Encoding Specificity — matching context boosts retrieval
+  const _currentEncodingContext = getScope(sessionId).encodingContext;
   if (node.metadata && _currentEncodingContext) {
     try {
       const meta = JSON.parse(node.metadata) as NodeMetadata;
@@ -131,7 +231,7 @@ export function activateNode(nodeId: string, energy = 1.0): ActivationResult {
     } catch { /* skip */ }
   }
 
-  const totalEnergy = Math.min(1.0, energy + boost);
+  const totalEnergy = Math.min(1.0, (energy + boost) * refractoryDampen);
 
   const newActivationCount = (node.activation_count || 0) + 1;
 
@@ -140,6 +240,10 @@ export function activateNode(nodeId: string, energy = 1.0): ActivationResult {
     activation_count: newActivationCount,
     last_activated: now,
   });
+
+  // 23.2: Track coherence group (session-scoped)
+  getScope(sessionId).coherenceGroup.add(nodeId);
+  getScope(sessionId).activatedNodeIds.add(nodeId);
 
   const activatedNodes: Map<string, Node> = new Map();
   const touchedEdges: Edge[] = [];
@@ -154,7 +258,7 @@ export function activateNode(nodeId: string, energy = 1.0): ActivationResult {
     expandChunk(node.chunk_id, totalEnergy * 0.3, activatedNodes);
   }
 
-  spread(nodeId, totalEnergy, 0, activatedNodes, touchedEdges, new Set([nodeId]));
+  spread(nodeId, totalEnergy, 0, activatedNodes, touchedEdges, new Set([nodeId]), sessionId);
   antiHebbianPass(nodeId, activatedNodes);
 
   const inhibited = applyCompetitiveInhibition(activatedNodes);
@@ -204,10 +308,12 @@ function spread(
   activatedNodes: Map<string, Node>,
   touchedEdges: Edge[],
   visited: Set<string>,
+  sessionId = 'default',
 ): void {
-  // M52: Gehirnwellen — mode modulates depth and budget
-  const effectiveMaxDepth = _systemMode === 'gamma' ? 3 : _systemMode === 'theta' ? 5 : MAX_DEPTH;
-  const effectiveBudget = _systemMode === 'gamma' ? 30 : _systemMode === 'theta' ? 70 : ACTIVATION_BUDGET;
+  // M52: Gehirnwellen — mode modulates depth and budget (session-scoped)
+  const scope = getScope(sessionId);
+  const effectiveMaxDepth = scope.systemMode === 'gamma' ? 3 : scope.systemMode === 'theta' ? 5 : MAX_DEPTH;
+  const effectiveBudget = scope.systemMode === 'gamma' ? 30 : scope.systemMode === 'theta' ? 70 : ACTIVATION_BUDGET;
 
   if (depth >= effectiveMaxDepth) return;
   if (activatedNodes.size >= effectiveBudget) return;
@@ -229,9 +335,17 @@ function spread(
       if (neighbor) {
         const inhibitedActivation = Math.max(0, (neighbor.activation || 0) - energy * edge.strength * 0.3);
         updateNode(neighborId, { activation: inhibitedActivation });
+        // 16.5: Inhibitory Plasticity — staerke Inhibitions-Edge wenn bestaetigt
+        if (energy > 0.3 && (neighbor.activation || 0) > 0.1) {
+          strengthenEdge(edge.id, 0.02);
+        }
       }
       continue;
     }
+
+    // 16.2: Stochastische Transmission — nicht jede Edge feuert jedes Mal
+    const releaseProbability = edge.strength > 0.9 ? 1.0 : 0.3 + edge.strength * 0.7;
+    if (Math.random() > releaseProbability) continue;
 
     // M54: Basalganglien/Habits — ultra-myelinated pathways bypass decay
     let myelinFactor: number;
@@ -243,12 +357,28 @@ function spread(
       myelinFactor = SPREAD_FACTOR;
     }
 
-    let spreadEnergy = energy * edge.strength * myelinFactor * cueOverloadDampen;
+    // 16.3: STP — Kurzzeit-Plastizitaet
+    const stpModifier = getSTPModifier(edge.id);
+    let spreadEnergy = energy * edge.strength * myelinFactor * cueOverloadDampen * stpModifier;
 
     if (edge.type === 'caused_by' || edge.type === 'enables') {
       spreadEnergy *= 1.2;
     } else if (edge.type === 'part_of') {
       spreadEnergy *= 1.1;
+    }
+
+    // 21.2: Retrograde dampening — Nodes mit vielen Edges signalisieren "weniger senden"
+    spreadEnergy *= getRetrogradeDampening(neighborId);
+
+    // 22.5: Adaptive Coding — Edge-Gewichte je nach TaskMode (session-scoped)
+    const modeWeights = MODE_EDGE_WEIGHTS[scope.taskMode];
+    if (modeWeights && modeWeights[edge.type]) {
+      spreadEnergy *= modeWeights[edge.type];
+    }
+
+    // 23.2: Coherence — Nodes in gleicher Runde kommunizieren besser (session-scoped)
+    if (scope.coherenceGroup.has(nodeId) && scope.coherenceGroup.has(neighborId)) {
+      spreadEnergy *= 1.15;
     }
 
     if (spreadEnergy < MIN_ACTIVATION) continue;
@@ -257,7 +387,13 @@ function spread(
     if (!neighbor) continue;
 
     const preActivation = neighbor.activation || 0;
-    const newActivation = Math.min(1.0, preActivation + spreadEnergy);
+    // 16.1: Refraktaerzeit auf Target-Node
+    let targetRefractoryDampen = 1.0;
+    const targetTimeSince = Date.now() - (neighbor.last_activated || 0);
+    if (targetTimeSince < 30000 && preActivation > 0.5) {
+      targetRefractoryDampen = 0.3 + 0.7 * (targetTimeSince / 30000);
+    }
+    const newActivation = Math.min(1.0, preActivation + spreadEnergy * targetRefractoryDampen);
     updateNode(neighborId, {
       activation: newActivation,
       last_activated: Date.now(),
@@ -266,6 +402,7 @@ function spread(
     hebbianStrengthening(edge.id, nodeId, neighborId);
     antiHebbianWeakening(edge.id, nodeId, preActivation);
     touchedEdges.push(edge);
+    recordEdgeFiring(edge.id);
 
     const refreshed = getNode(neighborId);
     if (refreshed) activatedNodes.set(neighborId, refreshed);
@@ -273,7 +410,7 @@ function spread(
     if (activatedNodes.size < effectiveBudget) {
       // M54: Habits don't increment depth — they act like direct connections
       const nextDepth = edge.strength > 0.9 ? depth : depth + 1;
-      spread(neighborId, spreadEnergy, nextDepth, activatedNodes, touchedEdges, visited);
+      spread(neighborId, spreadEnergy, nextDepth, activatedNodes, touchedEdges, visited, sessionId);
     }
   }
 }
@@ -284,7 +421,22 @@ function hebbianStrengthening(edgeId: string, sourceId: string, targetId: string
   if (!source || !target) return;
 
   if (source.activation > 0.1 && target.activation > 0.1) {
-    strengthenEdge(edgeId, HEBBIAN_INCREMENT);
+    // 16.4: Metaplasticity/BCM — adaptive Hebbian increment
+    const avgActivationCount = (source.activation_count + target.activation_count) / 2;
+    let adaptiveIncrement = HEBBIAN_INCREMENT;
+    if (avgActivationCount > 50) {
+      adaptiveIncrement *= 0.5;
+    } else if (avgActivationCount > 20) {
+      adaptiveIncrement *= 0.75;
+    } else if (avgActivationCount < 5) {
+      adaptiveIncrement *= 1.3;
+    }
+    // 18.2: Plasticity modulates learning rate
+    const devPhase = getDevelopmentPhase();
+    adaptiveIncrement *= (0.5 + devPhase.plasticity * 0.5);
+    // 21.2: Metaplastic learning rate — viel gelernt → langsamer, wenig → schneller
+    adaptiveIncrement *= getMetaplasticLearningRate();
+    strengthenEdge(edgeId, adaptiveIncrement);
   }
 }
 
@@ -293,7 +445,9 @@ function antiHebbianWeakening(edgeId: string, sourceId: string, targetPreActivat
   if (!source) return;
 
   if (source.activation > 0.3 && targetPreActivation < 0.05) {
-    weakenEdge(edgeId, 0.02);
+    // 16.4: BCM — hochaktive Nodes haben staerkere LTD
+    const adaptiveDecay = source.activation_count > 30 ? 0.04 : 0.02;
+    weakenEdge(edgeId, adaptiveDecay);
   }
 }
 
@@ -428,14 +582,14 @@ export function enrichNodeFromContext(node: Node, queryContext: string): boolean
   return true;
 }
 
-export function activateByQuery(query: string, energy = 1.0): ActivationResult {
+export function activateByQuery(query: string, energy = 1.0, sessionId = 'default'): ActivationResult {
   const hits = searchNodes(query);
   const allActivated: Map<string, Node> = new Map();
   const allEdges: Edge[] = [];
   let totalInhibited = 0;
 
   for (const hit of hits) {
-    const result = activateNode(hit.id, energy);
+    const result = activateNode(hit.id, energy, sessionId);
     for (const n of result.activated) {
       allActivated.set(n.id, n);
     }
@@ -489,6 +643,9 @@ export function decayAllActivations(): number {
       effectiveDecay = 0.90;
     }
 
+    // 23.3: Hub-Nodes verfallen langsamer
+    effectiveDecay *= getHubDecayFactor(row.id);
+
     const decayed = row.activation * effectiveDecay;
     if (decayed < MIN_ACTIVATION) {
       updateNode(row.id, { activation: 0 });
@@ -517,12 +674,32 @@ function decayUnusedEdges(): void {
 
 export function getActivatedNodes(limit = 20): Node[] {
   const db = getDb();
-  const nodes = db.prepare(
+  let nodes = db.prepare(
     'SELECT * FROM nodes WHERE activation > 0 ORDER BY activation DESC LIMIT ?',
   ).all(limit * 2) as Node[];
 
+  // 19.1: Filter out archived nodes
+  nodes = nodes.filter(n => {
+    if (!n.metadata) return true;
+    try {
+      const meta = JSON.parse(n.metadata);
+      return !meta.visibility_tier || meta.visibility_tier === 'active';
+    } catch { return true; }
+  });
+
   // M35: Complementary Learning Tiers — fragile memories get less retrieval weight
   for (const node of nodes) {
+    // 12.4: Cortical nodes skip tier penalty — quasi-permanent
+    let meta: Record<string, unknown> = {};
+    try { meta = node.metadata ? JSON.parse(node.metadata) : {}; } catch {}
+    if (meta.memory_tier === 'cortical') {
+      const edgeCount = getEdgesForNode(node.id).length;
+      if (edgeCount > 20) {
+        node.activation *= Math.max(0.5, 1.0 - (edgeCount - 20) * 0.02);
+      }
+      continue;
+    }
+
     const isTier1 = node.confidence < 0.5 || node.activation_count < 5;
     if (isTier1) {
       node.activation *= 0.6;
@@ -675,7 +852,7 @@ function semanticAutoLink(nodeId: string, node: Node, maxEdges: number = AUTO_LI
     // Strength from similarity: capped at 0.7 for auto-links
     const strength = Math.min(0.7, match.sim * 0.5);
     const edgeType = match.sim > 0.8 ? 'similar_to' : detectEdgeType(node.content, other.content);
-    const edge = addEdge(nodeId, match.id, edgeType, strength);
+    const edge = addEdge(nodeId, match.id, edgeType, strength, { auto_generated: true });
     createdEdges.push(edge);
   }
 
@@ -684,11 +861,28 @@ function semanticAutoLink(nodeId: string, node: Node, maxEdges: number = AUTO_LI
 
 // ── Mechanism 13: Priming ────────────────────────────────────
 
-export function primeActivations(factor: number = 0.3): void {
+export function primeActivations(factor: number = 0.3, sessionId?: string): void {
   const db = getDb();
-  db.prepare(
-    'UPDATE nodes SET activation = activation * ? WHERE activation > 0'
-  ).run(factor);
+  if (sessionId) {
+    const scope = getScope(sessionId);
+    if (scope.activatedNodeIds.size > 0) {
+      const ids = Array.from(scope.activatedNodeIds);
+      for (let i = 0; i < ids.length; i += 50) {
+        const batch = ids.slice(i, i + 50);
+        const placeholders = batch.map(() => '?').join(',');
+        db.prepare(`UPDATE nodes SET activation = activation * ? WHERE id IN (${placeholders}) AND activation > 0`)
+          .run(factor, ...batch);
+      }
+    }
+  } else {
+    db.prepare('UPDATE nodes SET activation = activation * ? WHERE activation > 0').run(factor);
+  }
+
+  // 16.3: STP Cleanup — alte Eintraege entfernen
+  const now = Date.now();
+  for (const [id, entry] of _recentEdgeFirings) {
+    if (now - entry.lastFired > STP_WINDOW) _recentEdgeFirings.delete(id);
+  }
 }
 
 // ── Mechanism 14: Inhibition of Return ───────────────────────
@@ -772,6 +966,124 @@ function patternComplete(activatedNodes: Map<string, Node>): void {
   }
 }
 
+// ── 22.1: Retrieval-Induced Forgetting ────────────────────────
+
+function applyRetrievalInducedForgetting(activatedNodes: Map<string, Node>): number {
+  if (activatedNodes.size < 5) return 0;
+
+  const topNodes = Array.from(activatedNodes.values())
+    .sort((a, b) => b.activation - a.activation)
+    .slice(0, 10);
+  const topIds = new Set(topNodes.map(n => n.id));
+
+  const db = getDb();
+  const placeholders = topNodes.map(() => '?').join(',');
+  const candidates = db.prepare(
+    `SELECT id, activation FROM nodes WHERE activation > 0.05 AND id NOT IN (${placeholders}) LIMIT 30`
+  ).all(...topNodes.map(n => n.id)) as Array<{ id: string; activation: number }>;
+
+  let suppressed = 0;
+
+  for (const candidate of candidates) {
+    const candidateVec = getEmbedding(candidate.id);
+    if (!candidateVec) continue;
+
+    let maxSim = 0;
+    for (const top of topNodes) {
+      const topVec = getEmbedding(top.id);
+      if (!topVec) continue;
+      const sim = cosineSimilarity(candidateVec, topVec);
+      if (sim > maxSim) maxSim = sim;
+    }
+
+    if (maxSim > 0.5) {
+      const suppressedActivation = candidate.activation * 0.3;
+      updateNode(candidate.id, { activation: suppressedActivation });
+      activatedNodes.delete(candidate.id);
+      suppressed++;
+    }
+  }
+
+  return suppressed;
+}
+
+// ── 25.3: Anti-Hijack — Dominanz-Erkennung ──────────────────
+
+function applyAntiHijack(activatedNodes: Map<string, Node>): number {
+  if (activatedNodes.size < 5) return 0;
+
+  const db = getDb();
+  const avgRow = db.prepare(
+    "SELECT AVG(activation_count) as avg FROM nodes WHERE type NOT IN ('core', 'system_knowledge') AND activation_count > 0"
+  ).get() as { avg: number } | undefined;
+  const avgAct = avgRow?.avg || 1;
+
+  let capped = 0;
+  for (const [id, node] of activatedNodes) {
+    const dominance = node.activation_count / avgAct;
+    if (dominance > 10) {
+      const ceiling = avgAct * 2;
+      const dampFactor = Math.min(1.0, ceiling / node.activation_count);
+      const cappedActivation = node.activation * dampFactor;
+      updateNode(id, { activation: cappedActivation });
+      const refreshed = getNode(id);
+      if (refreshed) activatedNodes.set(id, refreshed);
+      capped++;
+    }
+  }
+  return capped;
+}
+
+// ── 25.5: Divisive Normalization — Kanonische Gain Control ──
+
+function applyDivisiveNormalization(activatedNodes: Map<string, Node>): void {
+  if (activatedNodes.size < 3) return;
+
+  const BASELINE = 0.1;
+  const totalActivation = Array.from(activatedNodes.values())
+    .reduce((sum, n) => sum + n.activation, 0);
+
+  if (totalActivation < BASELINE) return;
+
+  for (const [id, node] of activatedNodes) {
+    const normalized = node.activation / (BASELINE + totalActivation);
+    const scaled = normalized * activatedNodes.size;
+    const final = Math.min(1.0, Math.max(0, scaled));
+    updateNode(id, { activation: final });
+    const refreshed = getNode(id);
+    if (refreshed) activatedNodes.set(id, refreshed);
+  }
+}
+
+// ── 25.6: Kognitive Karten — Konzeptuelle Nachbarschaften ───
+
+export function activateNeighborhood(entityId: string, hops = 2): string[] {
+  const db = getDb();
+  const visited = new Set<string>([entityId]);
+  let frontier = [entityId];
+
+  for (let hop = 0; hop < hops; hop++) {
+    const nextFrontier: string[] = [];
+    for (const nodeId of frontier) {
+      const neighbors = db.prepare(`
+        SELECT CASE WHEN source_id = ? THEN target_id ELSE source_id END as neighbor_id
+        FROM edges WHERE (source_id = ? OR target_id = ?) AND strength > 0.3
+      `).all(nodeId, nodeId, nodeId) as Array<{ neighbor_id: string }>;
+
+      for (const n of neighbors) {
+        if (!visited.has(n.neighbor_id)) {
+          visited.add(n.neighbor_id);
+          nextFrontier.push(n.neighbor_id);
+        }
+      }
+    }
+    frontier = nextFrontier;
+  }
+
+  visited.delete(entityId);
+  return Array.from(visited).slice(0, 15);
+}
+
 // ── Mechanism 11: Conversation Activation ────────────────────
 
 export function activateByConversation(
@@ -785,7 +1097,7 @@ export function activateByConversation(
   for (const msg of messages) {
     const hits = searchNodes(msg.content);
     for (const hit of hits) {
-      const result = activateNode(hit.id, msg.weight);
+      const result = activateNode(hit.id, msg.weight, sessionId);
       for (const n of result.activated) allActivated.set(n.id, n);
       for (const e of result.edges) {
         if (!allEdges.find(ex => ex.id === e.id)) allEdges.push(e);
@@ -804,9 +1116,35 @@ export function activateByConversation(
   applyInhibitionOfReturn(allActivated, sessionId);
   patternComplete(allActivated);
 
+  // 12.2: Engram Completion — bewiesene Muster staerker als Chunk-Completion
+  completeEngrams(allActivated);
+
+  // 12.2: Aktivierungsmuster aufzeichnen fuer zukuenftige Engram-Erkennung
+  recordActivationPattern(Array.from(allActivated.keys()).slice(0, 15));
+
+  // 25.3: Anti-Hijack — Nodes die alles dominieren werden gecapped
+  applyAntiHijack(allActivated);
+
+  // 25.5: Divisive Normalization — kanonische Gain Control
+  applyDivisiveNormalization(allActivated);
+
+  // 22.1: Retrieval-Induced Forgetting — aehnliche aber nicht-Top Nodes unterdruecken
+  applyRetrievalInducedForgetting(allActivated);
+
+  // 15.3b: Orienting modulates activation budget (focused → fewer, broad → more)
+  let orientingBudget = ACTIVATION_BUDGET;
+  try {
+    const orientRow = getDb().prepare("SELECT value FROM system_state WHERE key = 'orienting_level'")
+      .get() as { value: string } | undefined;
+    if (orientRow) {
+      const orienting = parseFloat(orientRow.value);
+      orientingBudget = Math.round(30 + (1 - orienting) * 40);
+    }
+  } catch { /* fallback to default */ }
+
   const budgeted = Array.from(allActivated.values())
     .sort((a, b) => b.activation - a.activation)
-    .slice(0, ACTIVATION_BUDGET);
+    .slice(0, orientingBudget);
 
   return { activated: budgeted, edges: allEdges, inhibited: totalInhibited };
 }

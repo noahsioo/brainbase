@@ -6,6 +6,7 @@ import { extractFromPrompt } from '../extraction/code-extractor.js';
 import { calculateSignalStrength, GATE_HEBBIAN } from '../signal/signal-strength.js';
 import { activateByQuery } from '../memory/activation.js';
 import { extractEntities, updateCounters, checkAutoNodeCreation } from '../signal/counters.js';
+import { clearScope } from '../memory/session-scope.js';
 
 
 interface SessionEndInput {
@@ -28,6 +29,7 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
       ).run(row.count, input.session_id);
 
       endSession(input.session_id);
+      clearScope(input.session_id);
     }
 
     const config = getConfig();

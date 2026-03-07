@@ -1,4 +1,5 @@
 import type { Node } from '../memory/store.js';
+import { getAdaptiveQualityThreshold } from '../learning/self-tuner.js';
 
 export interface ExtractedFact {
   content: string;
@@ -44,6 +45,7 @@ interface VerifiedExtraction {
   merged_count: number;
   contradictions: Array<{ new_content: string; existing_node_id: string }>;
   enrichments: NodeEnrichment[];
+  evidence_matches: string[];
 }
 
 export function isSimilar(a: string, b: string): boolean {
@@ -124,6 +126,7 @@ export function verifyExtraction(
     merged_count: 0,
     contradictions: [],
     enrichments: [],
+    evidence_matches: [],
   };
 
   if (!response.new_facts || !Array.isArray(response.new_facts)) {
@@ -156,6 +159,7 @@ export function verifyExtraction(
       if (isSimilar(content, node.content)) {
         isDuplicate = true;
         result.merged_count++;
+        result.evidence_matches.push(node.id);
 
         const newInfo = extractNewInfo(content, node.content);
         if (newInfo) {
@@ -177,11 +181,17 @@ export function verifyExtraction(
 
     if (isDuplicate) continue;
 
-    // Quality Gate: reject low-quality extractions
+    // Quality Gate: reject low-quality extractions (11.4: adaptive threshold)
     const qualityScore = calculateQualityScore(content, fact.type);
-    if (qualityScore < 0.3) continue;
+    if (qualityScore < getAdaptiveQualityThreshold()) continue;
 
     let confidence = Math.min(0.8, Math.max(0, fact.confidence));
+
+    // 11.2: Content-level sarcasm → drastically reduce confidence
+    if (detectContentSarcasm(content)) {
+      confidence *= 0.2;
+    }
+
     const isIdentity = IDENTITY_TYPES.includes(fact.type);
     const importanceCap = isIdentity ? 1.0 : IMPORTANCE_CAP;
     confidence = Math.min(confidence, importanceCap);
@@ -195,6 +205,18 @@ export function verifyExtraction(
   }
 
   return result;
+}
+
+// ── Content-Level Sarcasm Detection ─────────────────────────
+
+const SARCASM_CONTENT_PATTERNS = [
+  /\b(natuerlich|natürlich|of course|obviously|clearly)\b.*\b(nicht|not|never|nie)\b/i,
+  /\b(super|toll|great|amazing|brilliant)\b.*\b(funktioniert|works|klappt)\b.*\b(nicht|not)\b/i,
+  /\b(angeblich|supposedly|apparently|vermeintlich)\b/i,
+];
+
+function detectContentSarcasm(content: string): boolean {
+  return SARCASM_CONTENT_PATTERNS.some(p => p.test(content));
 }
 
 // ── Quality Score ───────────────────────────────────────────

@@ -5,6 +5,7 @@ import { PID_PATH, LOGS_DIR, MEMORY_DIR, isPaused, setPaused } from '../config.j
 import type { LLMClient } from '../llm/types.js';
 import { getLLMClient } from '../llm/factory.js';
 import { startSelfHealing, stopSelfHealing } from './self-heal.js';
+import { runIdleTick, runDmnIdlePass } from './idle-brain.js';
 import { createSession, endSession } from '../memory/store.js';
 import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { PriorityQueue } from './queue.js';
@@ -222,6 +223,20 @@ export async function startDaemon(): Promise<void> {
       log(`Auto-consolidation failed: ${err}`);
     }
   }, 60 * 60 * 1000);
+
+  // 17.1: Idle Brain — leichte Wartungsaufgaben alle 5 Minuten
+  setInterval(() => {
+    try {
+      const result = runIdleTick();
+      if (result.decay_applied > 0) {
+        log(`Idle tick: ${result.decay_applied} nodes decayed`);
+      }
+      const dmnNew = runDmnIdlePass();
+      if (dmnNew > 0) {
+        log(`Idle DMN: ${dmnNew} new connections`);
+      }
+    } catch { /* non-fatal */ }
+  }, 5 * 60 * 1000);
 
   process.on('SIGTERM', () => shutdown());
   process.on('SIGINT', () => shutdown());

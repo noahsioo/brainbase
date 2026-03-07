@@ -11,6 +11,12 @@ import { detectKnowledgeGaps } from '../learning/gap-detector.js';
 import { detectAndCreateChunks } from '../memory/chunking.js';
 import { runClusterStrengthening } from '../learning/cluster-tracker.js';
 import { analyzeAllCategories } from '../learning/style-analyzer.js';
+import { updateSelfModel, calibrateConfidence } from '../meta/self-model.js';
+import { runFeedbackChannels } from '../regulation/feedback-channels.js';
+import { recordMetricSnapshot, detectMetricDegradation } from '../regulation/neurofeedback.js';
+import { protectHubs } from '../regulation/hub-protection.js';
+import { immuneScan } from '../hygiene/immune-system.js';
+import { metabolicMaintenance } from '../hygiene/maintenance.js';
 import { extractFromMessage } from '../watcher/extractor.js';
 import type { LLMClient } from '../llm/types.js';
 
@@ -114,6 +120,137 @@ function transferToTier2(): number {
     transferred++;
   }
   return transferred;
+}
+
+// 11.1: Evidence Decay — single-mention old facts fade, high-evidence facts become permanent
+function applyEvidenceDecay(): void {
+  const db = getDb();
+  const fourteenDaysAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+
+  const oldNodes = db.prepare(`
+    SELECT id, importance, metadata FROM nodes
+    WHERE created_at < ? AND type NOT IN ('core', 'system_knowledge', 'entity', 'auto_topic')
+  `).all(fourteenDaysAgo) as Array<{ id: string; importance: number; metadata: string | null }>;
+
+  for (const node of oldNodes) {
+    let meta: Record<string, unknown> = {};
+    try { meta = node.metadata ? JSON.parse(node.metadata) : {}; } catch { meta = {}; }
+
+    // 12.4: Cortical nodes skip evidence decay — quasi-permanent
+    if (meta.memory_tier === 'cortical') continue;
+
+    const evidence = (meta.evidence_count as number) || 1;
+
+    if (evidence <= 1 && node.importance > 0.15) {
+      db.prepare('UPDATE nodes SET importance = ? WHERE id = ?')
+        .run(node.importance * 0.5, node.id);
+    } else if (evidence >= 5) {
+      db.prepare('UPDATE nodes SET confidence = MAX(confidence, 0.8) WHERE id = ?')
+        .run(node.id);
+    }
+  }
+}
+
+// 12.4: Systems Consolidation — hippocampal → cortical transition
+function systemsConsolidation(): number {
+  const db = getDb();
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  const candidates = db.prepare(`
+    SELECT id, confidence, activation_count, importance, metadata, created_at FROM nodes
+    WHERE created_at < ?
+    AND type NOT IN ('core', 'system_knowledge', 'disambiguator')
+  `).all(sevenDaysAgo) as Array<{
+    id: string; confidence: number; activation_count: number;
+    importance: number; metadata: string | null; created_at: number;
+  }>;
+
+  let transferred = 0;
+
+  for (const node of candidates) {
+    let meta: Record<string, unknown> = {};
+    try { meta = node.metadata ? JSON.parse(node.metadata) : {}; } catch { meta = {}; }
+    if (meta.memory_tier === 'cortical') continue;
+
+    const evidence = (meta.evidence_count as number) || 1;
+    const sessions = ((meta.unique_sessions as string[]) || []).length;
+
+    if (evidence >= 3 && sessions >= 2 && node.confidence >= 0.6) {
+      meta.memory_tier = 'cortical';
+      const newImportance = Math.min(0.95, node.importance + 0.05);
+      db.prepare('UPDATE nodes SET importance = ?, metadata = ? WHERE id = ?')
+        .run(newImportance, JSON.stringify(meta), node.id);
+      transferred++;
+    }
+  }
+
+  return transferred;
+}
+
+// 12.3: Neurogenesis — disambiguate similar but different nodes
+function applyNeurogenesis(): number {
+  const db = getDb();
+
+  const nodes = db.prepare(`
+    SELECT n.id, n.content, n.type FROM nodes n
+    JOIN embeddings e ON n.id = e.node_id
+    WHERE n.type NOT IN ('core', 'system_knowledge', 'disambiguator', 'auto_topic', 'pattern', 'distilled')
+    AND n.activation_count >= 2
+    ORDER BY n.activation_count DESC LIMIT 40
+  `).all() as Array<{ id: string; content: string; type: string }>;
+
+  let created = 0;
+
+  for (let i = 0; i < nodes.length && created < 3; i++) {
+    for (let j = i + 1; j < nodes.length && created < 3; j++) {
+      const vecA = getEmbedding(nodes[i].id);
+      const vecB = getEmbedding(nodes[j].id);
+      if (!vecA || !vecB) continue;
+
+      const sim = cosineSimilarity(vecA, vecB);
+      if (sim < 0.75 || sim > 0.92) continue;
+
+      const existing = getEdgeBetween(nodes[i].id, nodes[j].id);
+      if (existing) continue;
+
+      const wordsA = new Set(nodes[i].content.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+      const wordsB = new Set(nodes[j].content.toLowerCase().split(/\s+/).filter(w => w.length > 3));
+      let shared = 0;
+      for (const w of wordsA) { if (wordsB.has(w)) shared++; }
+      const wordOverlap = shared / Math.max(1, Math.min(wordsA.size, wordsB.size));
+      if (wordOverlap > 0.7) continue;
+
+      const disambContent = `${nodes[i].content.slice(0, 80)} ≠ ${nodes[j].content.slice(0, 80)}`;
+      const disambNode = addNode(disambContent, 'disambiguator', {
+        importance: 0.5,
+        confidence: 0.7,
+        source: 'neurogenesis',
+      });
+
+      addEdge(disambNode.id, nodes[i].id, 'similar_to', 0.5);
+      addEdge(disambNode.id, nodes[j].id, 'similar_to', 0.5);
+      created++;
+    }
+  }
+
+  return created;
+}
+
+// 12.1: Boundary Preference — episode boundary nodes get minimum importance
+function applyBoundaryPreference(): number {
+  const db = getDb();
+  const boundaryNodes = db.prepare(`
+    SELECT id, importance FROM nodes
+    WHERE metadata LIKE '%"boundary_node":true%'
+    AND importance < 0.4
+  `).all() as Array<{ id: string; importance: number }>;
+
+  let boosted = 0;
+  for (const node of boundaryNodes) {
+    db.prepare('UPDATE nodes SET importance = 0.4 WHERE id = ?').run(node.id);
+    boosted++;
+  }
+  return boosted;
 }
 
 // M42: Old emotional tags fade over time (emotion is transient)
@@ -315,7 +452,7 @@ If no clear patterns: { "schemas": [] }`, { temperature: 0.3 });
 }
 
 // M53: Default Mode Network — find hidden connections via embedding similarity (no LLM needed)
-function defaultModePass(): number {
+export function defaultModePass(): number {
   const db = getDb();
   const entities = db.prepare(`
     SELECT n.id, n.content FROM nodes n
@@ -340,7 +477,8 @@ function defaultModePass(): number {
       const existing = getEdgeBetween(entities[i].id, entities[j].id);
       if (existing) continue;
 
-      addEdge(entities[i].id, entities[j].id, 'inferred', sim * 0.3);
+      // 25.1: Auto-generated Edges starten schwaecher + markiert
+      addEdge(entities[i].id, entities[j].id, 'inferred', sim * 0.15, { auto_generated: true });
       connections++;
       if (connections >= 5) return connections;
     }
@@ -348,34 +486,79 @@ function defaultModePass(): number {
   return connections;
 }
 
+// 23.4: Nested NREM — hierarchisch wie Gehirn (Slow Oscillation → Spindles → Ripples)
+function nestedNremPhase(): {
+  pruning: PruningResult;
+  merge: MergeResult;
+  chunking: { chunks_created: number; nodes_chunked: number };
+  abstraction: AbstractionResult;
+} {
+  const db = getDb();
+
+  // ═ Phase 1: Slow Oscillation — Globaler Sweep ═
+  const lastConsolidationTs = getLastConsolidation();
+
+  const pruning = pruneGraph();
+  try { homeostaticScaling(); } catch { /* non-fatal */ }
+  try { protectHubs(); } catch { /* non-fatal */ }
+  const merge = mergeNodes();
+
+  // ═ Phase 2: Spindles — Pro Topic-Cluster ═
+  const topicClusters = db.prepare(`
+    SELECT DISTINCT chunk_id FROM nodes
+    WHERE chunk_id IS NOT NULL AND last_activated > ?
+  `).all(lastConsolidationTs) as Array<{ chunk_id: string }>;
+
+  for (const cluster of topicClusters.slice(0, 10)) {
+    const clusterNodes = db.prepare(
+      'SELECT id, confidence, activation_count, importance FROM nodes WHERE chunk_id = ?'
+    ).all(cluster.chunk_id) as Array<{ id: string; confidence: number; activation_count: number; importance: number }>;
+
+    // ═ Phase 3: Ripples — Pro Node im Cluster ═
+    for (const node of clusterNodes) {
+      if (node.activation_count >= 15 && node.importance < 0.5) {
+        db.prepare('UPDATE nodes SET importance = ? WHERE id = ?')
+          .run(Math.min(0.7, node.importance + 0.1), node.id);
+      }
+      if (node.activation_count < 3 && node.confidence > 0.5) {
+        db.prepare('UPDATE nodes SET confidence = ? WHERE id = ?')
+          .run(node.confidence * 0.9, node.id);
+      }
+    }
+  }
+
+  let chunking = { chunks_created: 0, nodes_chunked: 0 };
+  try { chunking = detectAndCreateChunks(); } catch { /* non-fatal */ }
+  const abstraction = buildAbstractions();
+
+  return { pruning, merge, chunking, abstraction };
+}
+
 export async function runConsolidation(client?: LLMClient): Promise<ConsolidationResult> {
   const start = Date.now();
 
-  // ═══ NREM PHASE: Faktische Consolidation ═══
-
-  // Pruning — dead edges + orphans
-  const pruning: PruningResult = pruneGraph();
-
-  // Homeostatic Scaling — balance over-dominant nodes
-  try { homeostaticScaling(); } catch { /* non-fatal */ }
-
-  // Merging — deduplicate similar nodes
-  const merge: MergeResult = mergeNodes();
-
-  // Chunking — group co-activated nodes
-  let chunking = { chunks_created: 0, nodes_chunked: 0 };
-  try { chunking = detectAndCreateChunks(); } catch { /* non-fatal */ }
-
-  // Abstraction Building — pattern recognition
-  const abstraction: AbstractionResult = buildAbstractions();
+  // ═══ NREM PHASE: Nested Consolidation (23.4) ═══
+  const { pruning, merge, chunking, abstraction } = nestedNremPhase();
 
   // M42: Tier 2 Transfer (Hippocampus → Cortex)
   let tier2Transferred = 0;
   try { tier2Transferred = transferToTier2(); } catch { /* non-fatal */ }
 
+  // 12.4: Systems Consolidation — hippocampal → cortical transition
+  try { systemsConsolidation(); } catch { /* non-fatal */ }
+
   // M42: Emotional Tag Review (old emotions fade)
   let emotionalReviewed = 0;
   try { emotionalReviewed = reviewEmotionalTags(); } catch { /* non-fatal */ }
+
+  // 11.1: Evidence Decay — single-mention old nodes fade, high-evidence nodes become permanent
+  try { applyEvidenceDecay(); } catch { /* non-fatal */ }
+
+  // 12.1: Boundary Preference — episode boundary nodes resist decay
+  try { applyBoundaryPreference(); } catch { /* non-fatal */ }
+
+  // 12.3: Neurogenesis — disambiguate similar but different nodes
+  try { applyNeurogenesis(); } catch { /* non-fatal */ }
 
   // M45: Spacing Effect (unique sessions → importance boost)
   let spacingBoosted = 0;
@@ -426,6 +609,48 @@ export async function runConsolidation(client?: LLMClient): Promise<Consolidatio
   // ═══ POST-SLEEP: Snapshot + Hot Memory ═══
 
   try { createSnapshot(); } catch { /* non-fatal */ }
+
+  // 15.4: Self-Model — system builds model of itself
+  try { updateSelfModel(); } catch { /* non-fatal */ }
+
+  // 19.4: Meta-Calibration — Confidence anpassen basierend auf Accuracy + Evidence
+  try {
+    const cal = calibrateConfidence();
+    if (cal.direction !== 'stable') {
+      const sign = cal.direction === 'up' ? 1 : -1;
+      getDb().prepare(`
+        UPDATE nodes SET confidence = MAX(0.1, MIN(1.0, confidence + ?))
+        WHERE confidence BETWEEN 0.3 AND 0.9
+          AND type NOT IN ('core')
+      `).run(sign * cal.adjusted);
+    }
+  } catch { /* non-fatal */ }
+
+  // 24.1: Immunsystem — kontaminierte Nodes isolieren
+  try { immuneScan(); } catch { /* non-fatal */ }
+
+  // 24.3: Glia-Analog — metabolische Kopplung + Myelinisierung
+  try { metabolicMaintenance(); } catch { /* non-fatal */ }
+
+  // 21.2: Feedback Channels — Retrograde Dampening auf High-Degree Nodes
+  try { runFeedbackChannels(); } catch { /* non-fatal */ }
+
+  // 21.6: Neurofeedback — Metriken-Snapshot + Degradation-Check
+  try {
+    const db = getDb();
+    const totalNodes = (db.prepare('SELECT COUNT(*) as c FROM nodes').get() as { c: number }).c;
+    const garbageNodes = (db.prepare("SELECT COUNT(*) as c FROM nodes WHERE importance < 0.2 AND activation_count < 2").get() as { c: number }).c;
+    const garbageRate = totalNodes > 0 ? garbageNodes / totalNodes : 0;
+    const posFeedbacks = (db.prepare("SELECT COUNT(*) as c FROM nodes WHERE emotional_tag = 'positive'").get() as { c: number }).c;
+    const negFeedbacks = (db.prepare("SELECT COUNT(*) as c FROM nodes WHERE emotional_tag = 'frustration'").get() as { c: number }).c;
+    recordMetricSnapshot(garbageRate, posFeedbacks, negFeedbacks);
+
+    const degradation = detectMetricDegradation();
+    if (degradation?.action === 'tighten_quality_threshold') {
+      db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+        .run('quality_threshold_boost', '0.05', Date.now());
+    }
+  } catch { /* non-fatal */ }
 
   updateHotMemoryInDb();
   updateAllProviderFiles();

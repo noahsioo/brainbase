@@ -1,10 +1,13 @@
 import type { LLMClient } from '../llm/types.js';
-import { addNode, getNode, updateNode, searchNodes, getDb, getOrCreateEntity, findEntityByName, getEdgeBetween, addEdge, strengthenEdge, getAllEntities, type Node, type NodeMetadata } from '../memory/store.js';
+import { addNode, getNode, updateNode, searchNodes, getDb, getOrCreateEntity, findEntityByName, getEdgeBetween, addEdge, strengthenEdge, getAllEntities, incrementEvidence, type Node, type NodeMetadata } from '../memory/store.js';
 import { autoLinkNodes } from '../memory/activation.js';
 import type { KeywordFlags } from '../signal/keywords.js';
 import { verifyExtraction, verifyEntity, verifyRelation, isGarbage, type ExtractionResponse, type ExtractedEntity, type ExtractedRelation } from '../extraction/verification.js';
 import { analyzeStyleForCategory } from '../learning/style-analyzer.js';
 import { queueEmbedding } from '../llm/embeddings.js';
+import { recordCreation, recordGarbage, recordEvidence } from '../learning/self-tuner.js';
+import { recordGarbageType } from '../hygiene/immune-system.js';
+import { recordLLMCall } from '../regulation/energy.js';
 import { generateContext } from '../memory/context-generator.js';
 
 const CONFIDENCE_CAP = 0.8;
@@ -19,6 +22,10 @@ interface EncodingSignal {
   mood: string;
   provider: string;
   message_index: number;
+  sarcasm_detected?: boolean;
+  rhetorical_detected?: boolean;
+  emotion_bypass_type?: string | null;
+  event_boundary?: boolean;
 }
 
 function readEncodingSignal(sessionId: string): EncodingSignal | null {
@@ -371,15 +378,90 @@ export async function extractFromMessage(
   if (Array.isArray(response.new_facts) && response.new_facts.length > 0) {
     const verified = verifyExtraction(response, existingNodes);
 
+    // 11.1: Evidence Accumulation — Duplikate staerken bestehende Nodes
+    for (const matchedId of verified.evidence_matches) {
+      incrementEvidence(matchedId);
+      recordEvidence();
+      // 19.3: Update source_details on confirmation
+      try {
+        const matched = getNode(matchedId);
+        if (matched?.metadata) {
+          const meta = JSON.parse(matched.metadata);
+          if (!meta.source_details) {
+            meta.source_details = { first_session: sessionId, last_confirmed: Date.now(), confirmation_count: 1 };
+          } else {
+            meta.source_details.last_confirmed = Date.now();
+            meta.source_details.confirmation_count = (meta.source_details.confirmation_count || 0) + 1;
+          }
+          updateNode(matchedId, { metadata: JSON.stringify(meta) });
+        }
+      } catch { /* non-fatal */ }
+    }
+    for (const enrichment of verified.enrichments) {
+      const existingNode = getNode(enrichment.node_id);
+      if (existingNode) {
+        const newContent = existingNode.content + ' (' + enrichment.addition + ')';
+        if (newContent.length <= 500) {
+          updateNode(enrichment.node_id, { content: newContent });
+        }
+      }
+    }
+
+    // 24.2: Misinformation Protection — contradictions nicht ignorieren
+    for (const contradiction of verified.contradictions) {
+      const existingNode = getNode(contradiction.existing_node_id);
+      if (!existingNode) continue;
+
+      let cMeta: Record<string, unknown> = {};
+      try { cMeta = existingNode.metadata ? JSON.parse(existingNode.metadata) : {}; } catch { cMeta = {}; }
+      const evidence = (cMeta.evidence_count as number) || 1;
+
+      if (evidence >= 5) {
+        const contradictNode = addNode(contradiction.new_content, 'fact', {
+          importance: 0.3,
+          confidence: 0.3,
+          source: `llm:${sessionId}`,
+          metadata: { contradiction_of: contradiction.existing_node_id, needs_confirmation: true },
+        });
+        addEdge(contradictNode.id, contradiction.existing_node_id, 'contradicts', 0.5);
+      } else {
+        const replacementNode = addNode(contradiction.new_content, existingNode.type, {
+          importance: existingNode.importance * 0.8,
+          confidence: 0.4,
+          source: `llm:${sessionId}`,
+        });
+        addEdge(replacementNode.id, contradiction.existing_node_id, 'replaced_by', 0.6);
+        updateNode(contradiction.existing_node_id, { importance: existingNode.importance * 0.5 });
+      }
+    }
+
     for (const fact of verified.new_facts) {
       const maxLen = fact.type === 'example' ? 2000 : 300;
       if (!fact.content || fact.content.length < 5 || fact.content.length > maxLen) continue;
-      if (isGarbage(fact.content)) continue;
+      if (isGarbage(fact.content)) { recordGarbage(); recordGarbageType(fact.content); continue; }
 
       const validTypes = ['preference', 'fact', 'decision', 'task', 'project', 'learning', 'identity', 'insight', 'example'];
       if (!validTypes.includes(fact.type)) continue;
 
-      const confidence = Math.min(CONFIDENCE_CAP, Math.max(0, fact.confidence));
+      // 10.2+10.3: Sarcasm → drastically reduce confidence (don't store jokes as facts)
+      let confidence = Math.min(CONFIDENCE_CAP, Math.max(0, fact.confidence));
+      if (encodingSig?.sarcasm_detected) {
+        confidence *= 0.3;
+      }
+      // 13.4: Rhetorical → reduce confidence (might not be factual)
+      if (encodingSig?.rhetorical_detected) {
+        confidence *= 0.5;
+      }
+
+      // 11.3: VTA Loop — Novelty gates plasticity (confidence boost/reduction)
+      if (encodingSig) {
+        if (encodingSig.novelty > 0.7) {
+          confidence = Math.min(CONFIDENCE_CAP, confidence + 0.1);
+        }
+        if (encodingSig.novelty < 0.3) {
+          confidence *= 0.85;
+        }
+      }
 
       const emotionalTag = flags?.frustration ? 'frustration' :
         (response.emotion?.type && response.emotion.type !== 'neutral' ? response.emotion.type : undefined);
@@ -395,18 +477,34 @@ export async function extractFromMessage(
         metadata: {
           ...fact.metadata,
           encoding_context: encodingContext,
+          source_details: {
+            first_session: sessionId,
+            last_confirmed: Date.now(),
+            confirmation_count: 1,
+          },
         } as NodeMetadata,
       });
 
       autoLinkNodes(node.id);
       queueEmbedding(node.id, node.content);
       createdNodes.push(node);
+      recordCreation();
+
+      // 12.1: Event Boundary — tag nodes created right after topic change
+      if (encodingSig?.event_boundary) {
+        const nodeMeta: Record<string, unknown> = node.metadata ? JSON.parse(node.metadata) : {};
+        nodeMeta.boundary_node = true;
+        updateNode(node.id, { metadata: JSON.stringify(nodeMeta) });
+      }
 
       if (fact.type === 'example' && fact.metadata?.category) {
         try { analyzeStyleForCategory(fact.metadata.category); } catch { /* non-critical */ }
       }
     }
   }
+
+  // 24.4: Energie-Management — LLM-Call tracken
+  recordLLMCall(sessionId, createdNodes.length);
 
   return createdNodes;
 }

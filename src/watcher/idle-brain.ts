@@ -1,0 +1,124 @@
+import { getDb, getNode, updateNode } from '../memory/store.js';
+import { measureSystemHealth } from '../senses/interoception.js';
+import { detectHungerZones } from '../memory/knowledge-hunger.js';
+import { updateSelfModel } from '../meta/self-model.js';
+import { defaultModePass } from '../consolidation/consolidation-runner.js';
+import { calculateSystemMood } from '../senses/interoception.js';
+
+export interface IdleResult {
+  health_updated: boolean;
+  hunger_checked: boolean;
+  self_model_updated: boolean;
+  dmn_connections: number;
+  decay_applied: number;
+  pre_warmed: number;
+}
+
+export function runIdleTick(): IdleResult {
+  const result: IdleResult = {
+    health_updated: false, hunger_checked: false,
+    self_model_updated: false, dmn_connections: 0, decay_applied: 0,
+    pre_warmed: 0,
+  };
+
+  const db = getDb();
+
+  // 1. System Health aktualisieren
+  try {
+    const health = measureSystemHealth();
+    db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('system_health', JSON.stringify({ ...health, _ts: Date.now() }), Date.now());
+    result.health_updated = true;
+  } catch { /* non-fatal */ }
+
+  // 1b. System-Mood aktualisieren
+  try { calculateSystemMood(); } catch { /* non-fatal */ }
+
+  // 2. Hunger Zones pruefen
+  try {
+    detectHungerZones();
+    result.hunger_checked = true;
+  } catch { /* non-fatal */ }
+
+  // 3. Self-Model updaten
+  try {
+    updateSelfModel();
+    result.self_model_updated = true;
+  } catch { /* non-fatal */ }
+
+  // 4. Leichter Activation Decay — Nodes die nicht mehr relevant sind, klingen ab
+  try {
+    const decayed = db.prepare(
+      "UPDATE nodes SET activation = activation * 0.95 WHERE activation > 0.01 AND activation < 0.3"
+    ).run();
+    result.decay_applied = decayed.changes;
+  } catch { /* non-fatal */ }
+
+  // 5. Pre-Warm Context — Session-relevante Nodes vorwaermen
+  try {
+    result.pre_warmed = preWarmContext();
+  } catch { /* non-fatal */ }
+
+  return result;
+}
+
+// 17.2: Proaktive Context-Vorbereitung — Session-Focus Entities vorwaermen
+export function preWarmContext(): number {
+  const db = getDb();
+  let warmed = 0;
+
+  try {
+    const focusRow = db.prepare(
+      "SELECT value FROM system_state WHERE key LIKE 'session_focus_%' ORDER BY updated_at DESC LIMIT 1"
+    ).get() as { value: string } | undefined;
+    if (!focusRow) return 0;
+
+    const focusEntities: string[] = JSON.parse(focusRow.value);
+
+    for (const entityName of focusEntities.slice(0, 3)) {
+      const entities = db.prepare(
+        "SELECT id FROM nodes WHERE type = 'entity' AND LOWER(content) = LOWER(?) LIMIT 1"
+      ).all(entityName) as Array<{ id: string }>;
+
+      for (const entity of entities) {
+        const node = getNode(entity.id);
+        if (!node) continue;
+        const newActivation = Math.min(0.15, (node.activation || 0) + 0.05);
+        if (newActivation > (node.activation || 0)) {
+          updateNode(entity.id, { activation: newActivation });
+          warmed++;
+        }
+
+        const edges = db.prepare(
+          "SELECT target_id, source_id FROM edges WHERE (source_id = ? OR target_id = ?) AND strength > 0.3 LIMIT 5"
+        ).all(entity.id, entity.id) as Array<{ target_id: string; source_id: string }>;
+
+        for (const edge of edges) {
+          const neighborId = edge.source_id === entity.id ? edge.target_id : edge.source_id;
+          const neighbor = getNode(neighborId);
+          if (!neighbor) continue;
+          const warmActivation = Math.min(0.08, (neighbor.activation || 0) + 0.03);
+          if (warmActivation > (neighbor.activation || 0)) {
+            updateNode(neighborId, { activation: warmActivation });
+            warmed++;
+          }
+        }
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  return warmed;
+}
+
+// 17.3: DMN-Pass — kreative Verbindungen (nur alle 30min)
+let _lastDmnRun = 0;
+const DMN_COOLDOWN = 30 * 60 * 1000;
+
+export function runDmnIdlePass(): number {
+  if (Date.now() - _lastDmnRun < DMN_COOLDOWN) return 0;
+  try {
+    const connections = defaultModePass();
+    _lastDmnRun = Date.now();
+    return connections;
+  } catch { return 0; }
+}

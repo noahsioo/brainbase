@@ -1,5 +1,6 @@
 import { getDb, type Edge, type Node } from '../memory/store.js';
 import { isGarbage } from '../extraction/verification.js';
+import { getDevelopmentPhase } from '../memory/cold-start.js';
 
 export interface PruningResult {
   edges_pruned: number;
@@ -7,6 +8,18 @@ export interface PruningResult {
   nodes_promoted: number;
   nodes_decayed: number;
   nodes_deleted: number;
+}
+
+// 19.1: Kontrolliertes Vergessen — archivieren statt loeschen
+function archiveNode(db: ReturnType<typeof getDb>, nodeId: string, tier: 'archive' | 'deep_archive'): void {
+  const row = db.prepare('SELECT metadata FROM nodes WHERE id = ?').get(nodeId) as { metadata: string | null } | undefined;
+  if (!row) return;
+  let meta: Record<string, unknown> = {};
+  try { if (row.metadata) meta = JSON.parse(row.metadata); } catch {}
+  meta.visibility_tier = tier;
+  meta.archived_at = Date.now();
+  db.prepare('UPDATE nodes SET metadata = ?, importance = 0.01 WHERE id = ?')
+    .run(JSON.stringify(meta), nodeId);
 }
 
 export function pruneGraph(): PruningResult {
@@ -19,16 +32,22 @@ export function pruneGraph(): PruningResult {
     nodes_deleted: 0,
   };
 
+  // 18.2: Development phase modulates pruning aggressiveness
+  const devPhase = getDevelopmentPhase();
+  const pm = devPhase.pruning_multiplier;
+
   // 1. Edge Pruning: weak edges that aren't connected to core nodes
   const coreNodeIds = (db.prepare(
     "SELECT id FROM nodes WHERE type = 'core'"
   ).all() as Array<{ id: string }>).map(r => r.id);
   const coreSet = new Set(coreNodeIds);
 
+  const edgeStrengthThreshold = 0.15 * pm;
+  const edgeCoActivationThreshold = Math.ceil(2 / pm);
   const weakEdges = db.prepare(`
     SELECT * FROM edges
-    WHERE strength < 0.15 AND co_activations < 2
-  `).all() as Edge[];
+    WHERE strength < ? AND co_activations < ?
+  `).all(edgeStrengthThreshold, edgeCoActivationThreshold) as Edge[];
 
   for (const edge of weakEdges) {
     if (coreSet.has(edge.source_id) || coreSet.has(edge.target_id)) continue;
@@ -38,17 +57,35 @@ export function pruneGraph(): PruningResult {
 
   // 1.5 Dead Edge Pruning: edges not strengthened in 30+ days AND weak
   const thirtyDaysAgoEdges = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const deadEdgeThreshold = 0.1 * pm;
   const deadEdges = db.prepare(`
     SELECT id FROM edges
-    WHERE strength < 0.1
+    WHERE strength < ?
       AND last_strengthened < ?
       AND source_id NOT IN (SELECT id FROM nodes WHERE type = 'core')
       AND target_id NOT IN (SELECT id FROM nodes WHERE type = 'core')
-  `).all(thirtyDaysAgoEdges) as Array<{ id: string }>;
+  `).all(deadEdgeThreshold, thirtyDaysAgoEdges) as Array<{ id: string }>;
 
   for (const edge of deadEdges) {
     db.prepare('DELETE FROM edges WHERE id = ?').run(edge.id);
     result.edges_pruned++;
+  }
+
+  // 1.7 Auto-generated Edge Decay: unconfirmed auto-edges older than 7 days with low strength
+  const sevenDaysAgoEdges = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const autoEdges = db.prepare(`
+    SELECT id, strength, metadata FROM edges
+    WHERE metadata LIKE '%auto_generated%' AND strength < 0.3
+    AND created_at < ?
+  `).all(sevenDaysAgoEdges) as Array<{ id: string; strength: number; metadata: string | null }>;
+
+  for (const edge of autoEdges) {
+    let meta: Record<string, unknown> = {};
+    try { meta = edge.metadata ? JSON.parse(edge.metadata) : {}; } catch {}
+    if (meta.auto_generated && !meta.user_confirmed) {
+      db.prepare('DELETE FROM edges WHERE id = ?').run(edge.id);
+      result.edges_pruned++;
+    }
   }
 
   // 2. Orphan Detection: nodes with zero edges (report only)
@@ -104,23 +141,33 @@ export function pruneGraph(): PruningResult {
 
   for (const node of allNodesForGarbage) {
     if (isGarbage(node.content)) {
-      db.prepare('DELETE FROM nodes WHERE id = ?').run(node.id);
+      archiveNode(db, node.id, 'deep_archive');
       result.nodes_deleted++;
     }
   }
 
   // 6. Delete very low importance nodes older than 7 days
   const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+  const deadNodeImportance = 0.2 * pm;
+  const deadNodeActivation = Math.ceil(3 / pm);
   const deadNodes = db.prepare(`
     SELECT id FROM nodes
-    WHERE importance < 0.2
+    WHERE importance < ?
       AND last_activated < ?
-      AND activation_count < 3
+      AND activation_count < ?
       AND type NOT IN ('core', 'entity', 'system_knowledge', 'identity', 'prospective')
-  `).all(sevenDaysAgo) as Array<{ id: string }>;
+  `).all(deadNodeImportance, sevenDaysAgo, deadNodeActivation) as Array<{ id: string }>;
 
   for (const node of deadNodes) {
-    db.prepare('DELETE FROM nodes WHERE id = ?').run(node.id);
+    // 23.3: Hub-protected Nodes werden NICHT archiviert
+    let deadMeta: Record<string, unknown> = {};
+    try {
+      const deadRow = db.prepare('SELECT metadata FROM nodes WHERE id = ?').get(node.id) as { metadata: string | null } | undefined;
+      if (deadRow?.metadata) deadMeta = JSON.parse(deadRow.metadata);
+    } catch { /* skip */ }
+    if (deadMeta.hub_protected) continue;
+
+    archiveNode(db, node.id, 'archive');
     result.nodes_deleted++;
   }
 

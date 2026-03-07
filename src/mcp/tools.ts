@@ -60,6 +60,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           description: 'Optional current topic for warm memory retrieval',
         },
+        provider: {
+          type: 'string',
+          description: 'Provider name (e.g. cursor, claude-desktop) for format optimization',
+        },
       },
     },
   },
@@ -210,7 +214,7 @@ function handleSearch(args: Record<string, unknown>): ToolResult {
   const limit = (args.limit as number) || 10;
 
   const directHits = searchNodes(query, limit);
-  const activation = activateByQuery(query, 0.5);
+  const activation = activateByQuery(query, 0.5, 'mcp-default');
 
   const seen = new Set(directHits.map(n => n.id));
   const combined = [...directHits];
@@ -234,7 +238,8 @@ function handleSearch(args: Record<string, unknown>): ToolResult {
 function handleContext(args: Record<string, unknown>): ToolResult {
   const mode = (args.mode as DetailMode) || 'STANDARD';
   const topic = args.topic as string | undefined;
-  const context = generateContext(mode, topic);
+  const provider = args.provider as string | undefined;
+  const context = generateContext(mode, topic, undefined, undefined, undefined, undefined, provider);
   return { content: [{ type: 'text', text: context }] };
 }
 
@@ -275,7 +280,7 @@ function handleRelated(args: Record<string, unknown>): ToolResult {
   const query = args.query as string;
   const limit = (args.limit as number) || 10;
 
-  activateByQuery(query, 0.8);
+  activateByQuery(query, 0.8, 'mcp-default');
   const activated = getActivatedNodes(limit);
 
   if (activated.length === 0) {
