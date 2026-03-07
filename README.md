@@ -12,38 +12,53 @@
 </p>
 
 <p align="center">
+  <a href="#the-problem">The Problem</a> ·
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How It Works</a> ·
   <a href="#supported-providers">Providers</a> ·
   <a href="#commands">Commands</a> ·
-  <a href="#dashboard">Dashboard</a> ·
   <a href="https://brainbase.dev">Website</a>
 </p>
 
 ---
 
-Every AI starts from zero. Every session. Every time. Your AI doesn't know your name, your stack, your preferences, your project — nothing. You repeat yourself endlessly.
+## The problem
 
-**BrainBase fixes this.** It gives every AI a real brain — built on neuroscience, not keyword matching.
+Every AI starts from zero. Every session. Every time.
 
-One brain. Every AI. Every device. Local. Private. Free.
+It doesn't know your name. It doesn't know your stack. It doesn't know that you've explained the same architecture three times this week. You tell it you're building a React app — and tomorrow it'll ask you what framework you use.
 
-## What makes BrainBase different
+The current "solutions"? A vector database that keyword-matches your old messages. A RAG wrapper that dumps 50 random chunks into the context window. A `.md` file you manually maintain. None of them actually *understand* anything. They just search text.
 
-This isn't another RAG wrapper or vector search. BrainBase is an actual brain — modeled after how the human brain stores, retrieves, and strengthens memories.
+Your AI is a genius with amnesia.
 
-**92 neuroscience mechanisms.** 18,000 lines of TypeScript. Built in 24 days by a 17-year-old.
+## What BrainBase is
 
-| Mechanism | What it does |
-|-----------|-------------|
-| **Thalamus** | Filters incoming information — only what matters gets through |
-| **Spreading Activation** | Finds relevant memories by activating connected knowledge |
-| **Hebbian Learning** | "Fire together, wire together" — connections strengthen with use |
-| **Consolidation** | Sleep cycles reorganize and strengthen important memories |
-| **Emotion System** | Frustration, excitement, curiosity — your AI feels context |
-| **Metacognition** | The brain knows what it knows and what it doesn't |
-| **6 Senses** | Code analysis, tone detection, emotion bypass, system health |
-| **Development Phases** | The brain matures: infant → child → teen → adult → wise |
+BrainBase is not a memory plugin. It's an actual brain.
+
+Not metaphorically. We took 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — and translated them into code. 92 are implemented. 18,000 lines of TypeScript. Built in 24 days.
+
+The AI you use (Claude, Cursor, Codex, Gemini — any of them) is just the mouth. It vibrates, it produces words. But the *brain* behind it? That's BrainBase. Same personality, same memories, same knowledge — no matter which AI you talk through.
+
+Switch from Claude to Cursor mid-project. BrainBase doesn't care. It knows you. It knows your project. It picks up where you left off.
+
+**One brain. Every AI. Local. Private. Free.**
+
+```bash
+npm install -g brainbase
+```
+
+## Why this is different
+
+| | Vector search / RAG | BrainBase |
+|---|---|---|
+| Storage | Chunks of text in a database | Knowledge graph — entities, relationships, weighted edges |
+| Retrieval | Keyword/embedding similarity | Spreading activation — memories trigger connected memories |
+| Learning | None | Hebbian learning — "fire together, wire together" |
+| Filtering | None — everything gets stored | Thalamus — only important signals pass through |
+| Over time | Gets slower, noisier | Gets smarter — consolidation prunes noise, strengthens patterns |
+| Background | Dead between sessions | Alive — sleep cycles, replay, creative connections |
+| Self-awareness | None | Metacognition — the brain knows what it knows and what it doesn't |
 
 <details>
 <summary><strong>All 92 mechanisms</strong></summary>
@@ -112,23 +127,13 @@ npm install -g brainbase
 # Initialize — creates your brain, connects your AI providers
 brainbase init
 
-# Check status — see your brain health, node count, provider status
-brainbase status
-
-# Start the watcher daemon — processes memories in the background
+# Start the background daemon — processes memories while you work
 brainbase watcher start
 
-# Open the dashboard — 3D brain visualization in your browser
-brainbase dashboard
-
-# Search your brain
-brainbase search "react state management"
-
-# View stats
-brainbase stats
+# That's it. Use your AI normally. BrainBase runs silently.
 ```
 
-After `brainbase init`, just use your AI normally. BrainBase works silently in the background — extracting knowledge, building connections, strengthening memories. Your AI gets smarter with every conversation.
+After `brainbase init`, just use your AI normally. BrainBase works in the background — extracting knowledge, building connections, strengthening memories. Your AI gets smarter with every conversation.
 
 ## How it works
 
@@ -156,15 +161,24 @@ Thalamus  Senses   Emotion   Memory
    Your AI now knows you
 ```
 
-1. **Every message** passes through the Thalamus — only important signals get through
-2. **6 Senses** analyze code, tone, emotion, system health, stability, context
+1. **Thalamus** filters incoming information — only important signals get through, noise gets blocked
+2. **6 Senses** analyze code patterns, tone, emotion, system health, knowledge consistency, context
 3. **Extraction** pulls entities, relationships, and facts from the conversation
 4. **Knowledge Graph** stores everything as interconnected nodes with weighted edges
-5. **Spreading Activation** finds relevant memories by traversing the graph
-6. **Context Generator** builds a narrative briefing and injects it into your AI
-7. **Consolidation** runs in the background — pruning, strengthening, connecting
+5. **Spreading Activation** finds relevant memories — one concept triggers connected knowledge, like how thinking about "coffee" activates "morning", "productivity", "that bug you fixed at 3am"
+6. **Context Generator** builds a natural-language briefing and injects it into your AI
+7. **Consolidation** runs in the background — pruning weak memories, strengthening important ones, finding connections you didn't see
 
-Your AI never sees the graph directly. It gets a natural-language briefing with exactly the right context for the current conversation.
+Your AI never sees the graph directly. It gets a narrative briefing with exactly the right context for the current conversation.
+
+## The brain is alive
+
+This isn't a database that waits for queries. BrainBase runs continuously:
+
+- **Sleep cycles** — every 6 hours, the brain consolidates. NREM strengthens important memories, REM finds creative connections between unrelated knowledge
+- **Hunger** — the brain detects knowledge gaps and drives your AI to ask the right questions. Not because you told it to — because it *wants* to know
+- **Development phases** — a new brain is like a child: curious about everything, low thresholds, absorbing everything. After hundreds of sessions, it matures: selective, fast, deep schemas
+- **Self-awareness** — the brain monitors itself. Too much noise? Raises thresholds. Knowledge fragmented? Triggers consolidation. It regulates itself
 
 ## Commands
 
@@ -187,29 +201,19 @@ Your AI never sees the graph directly. It gets a natural-language briefing with 
 
 ## Dashboard
 
-BrainBase includes a real-time 3D brain visualization dashboard:
+BrainBase includes a real-time 3D visualization of your brain:
 
-<!-- TODO: Screenshot/GIF hier einfuegen (brainbase dashboard starten → Screenshot machen → als docs/dashboard.png speichern) -->
+<!-- TODO: Screenshot/GIF einfuegen (brainbase dashboard → Screenshot → docs/dashboard.png) -->
 <!-- <p align="center"><img src="docs/dashboard.png" alt="BrainBase Dashboard" width="700"></p> -->
 
-- Knowledge graph rendered as an interactive 3D network
-- Node activation levels, edge strengths, memory clusters
+- Interactive 3D knowledge graph — nodes, edges, clusters
+- Activation levels and memory strength in real-time
 - Brain health metrics (connectivity, freshness, coherence)
-- Live watcher status and consolidation history
+- Watcher status and consolidation history
 
 ```bash
 brainbase dashboard
 ```
-
-## MCP Server
-
-BrainBase exposes 7 tools via MCP (Model Context Protocol):
-
-```bash
-brainbase mcp
-```
-
-Works with any MCP-compatible client (Cursor, Windsurf, Continue, etc.)
 
 ## Architecture
 
@@ -256,13 +260,11 @@ Your data is yours. Always.
 
 [Elastic License 2.0 (ELv2)](LICENSE.md)
 
-Free for personal and non-commercial use. See license for details.
+Free to use. See license for details.
 
 ## Author
 
 Built by **Noah Sioly** ([@noahsioo](https://x.com/noahsioo)), 17, from Germany.
-
-600k+ followers on social media. But this is the real thing.
 
 ---
 
