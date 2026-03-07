@@ -1485,6 +1485,12 @@ function integrateContext(sections: string[], style: ContextStyle = 'narrative',
 
   const chunks: string[] = [];
 
+  // V3 7.7: Scene Construction — kohaerentes Szenen-Briefing fuer narrative Provider
+  if (style === 'narrative') {
+    const scene = buildSceneBriefing();
+    if (scene) chunks.push(scene);
+  }
+
   for (const section of sections) {
     if (style === 'minimal') {
       const cleaned = sectionToMinimal(section);
@@ -1496,6 +1502,28 @@ function integrateContext(sections: string[], style: ContextStyle = 'narrative',
   }
 
   return chunks.slice(0, maxChunks).join('\n\n');
+}
+
+function buildSceneBriefing(): string | null {
+  try {
+    const db = getDb();
+    const moodRow = db.prepare("SELECT value FROM system_state WHERE key = 'current_mood'")
+      .get() as { value: string } | undefined;
+    const taskRow = db.prepare("SELECT value FROM system_state WHERE key = 'current_task_mode'")
+      .get() as { value: string } | undefined;
+
+    if (!moodRow && !taskRow) return null;
+
+    const parts: string[] = [];
+    if (taskRow?.value) parts.push(`Modus: ${taskRow.value}`);
+    if (moodRow?.value && moodRow.value !== 'neutral') parts.push(`Stimmung: ${moodRow.value}`);
+
+    const hour = new Date().getHours();
+    const timeOfDay = hour < 6 ? 'Nacht' : hour < 12 ? 'Morgen' : hour < 18 ? 'Nachmittag' : 'Abend';
+    parts.push(timeOfDay);
+
+    return parts.join('. ') + '.';
+  } catch { return null; }
 }
 
 // 14.2: Minimal format for small-context providers (Cursor, Aider, Codex)
