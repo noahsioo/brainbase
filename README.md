@@ -21,16 +21,9 @@
   <a href="#how-it-works">How It Works</a> ·
   <a href="#supported-providers">Providers</a> ·
   <a href="#commands">Commands</a> ·
+  <a href="#dashboard">Dashboard</a> ·
   <a href="https://brainbase.dev">Website</a>
 </p>
-
----
-
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/faf0e7af-a8eb-44b9-8317-c011530fca3b" width="700" controls></video>
-</p>
-
----
 
 ## The problem
 
@@ -46,7 +39,7 @@ Your AI is a genius with amnesia.
 
 BrainBase is not a memory plugin. It's an actual brain.
 
-Not metaphorically. 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — translated into code. **92 mechanisms. 18,000 lines of TypeScript. Built in 24 days by a 17-year-old.**
+Not metaphorically. 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — translated into code. **92 mechanisms. 18,000 lines of TypeScript. Built in 20 days by a 17-year-old.**
 
 The AI you use (OpenClaw, Claude Code, Cursor, Codex, Gemini — any of them) is just the mouth. It vibrates, it produces words. But the *brain* behind it? That's BrainBase. Same personality, same memories, same knowledge — no matter which AI you talk through.
 
@@ -212,10 +205,11 @@ This isn't a database that waits for queries. BrainBase runs continuously:
 
 ## Dashboard
 
-BrainBase includes a real-time 3D visualization of your brain:
+Oh yeah, we also built a dashboard. Because why not. 🧠
 
-<!-- TODO: Screenshot/GIF einfuegen (brainbase dashboard → Screenshot → docs/dashboard.png) -->
-<!-- <p align="center"><img src="docs/dashboard.png" alt="BrainBase Dashboard" width="700"></p> -->
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/faf0e7af-a8eb-44b9-8317-c011530fca3b" width="700" controls></video>
+</p>
 
 - Interactive 3D knowledge graph — nodes, edges, clusters
 - Activation levels and memory strength in real-time
