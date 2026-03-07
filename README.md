@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.svg" alt="BrainBase" width="80">
+</p>
+
 <h1 align="center">BrainBase</h1>
 
 <p align="center">
