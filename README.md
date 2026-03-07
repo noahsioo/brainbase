@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/npm/v/brainbase" alt="npm">
-  <img src="https://img.shields.io/badge/license-ELv2-blue" alt="license">
-  <img src="https://img.shields.io/badge/TypeScript-18k_lines-blue" alt="TypeScript">
-  <img src="https://img.shields.io/badge/mechanisms-92-purple" alt="mechanisms">
+  <img src="https://img.shields.io/npm/v/brainbase?style=for-the-badge" alt="npm">
+  <img src="https://img.shields.io/badge/license-ELv2-blue?style=for-the-badge" alt="license">
+  <img src="https://img.shields.io/badge/TypeScript-18k_lines-blue?style=for-the-badge" alt="TypeScript">
+  <img src="https://img.shields.io/badge/mechanisms-92-purple?style=for-the-badge" alt="mechanisms">
 </p>
 
 <p align="center">
