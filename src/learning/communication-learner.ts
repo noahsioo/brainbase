@@ -9,7 +9,7 @@ interface ContextEffectiveness {
   total_uses: number;
 }
 
-export function recordContextDelivery(mode: string, length: number): void {
+export function recordContextModeDelivery(mode: string, length: number): void {
   const db = getDb();
   let stats: Record<string, ContextEffectiveness> = {};
   try {

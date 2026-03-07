@@ -341,6 +341,17 @@ function buildSceneSlot(budget: number, topic?: string, mood?: string, taskMode?
   return truncateToTokens(`## Situation\n${userName} — ${topicStr} (${moodStr}${timeStr})\n`, budget);
 }
 
+function getContextEffectivenessScore(node: Node): number {
+  if (!node.metadata) return 0.5;
+  try {
+    const meta = JSON.parse(node.metadata) as Record<string, unknown>;
+    const pos = (meta.context_positive as number) || 0;
+    const neg = (meta.context_negative as number) || 0;
+    if (pos + neg === 0) return 0.5;
+    return (pos + 1) / (pos + neg + 2);
+  } catch { return 0.5; }
+}
+
 function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: string, salience?: string): string {
   // 22.3: Speed-Accuracy Tradeoff — dynamische Node-Limits
   const tradeoffs = getTradeoffState();
@@ -358,6 +369,15 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
   }
 
   if (nodes.length === 0) return '';
+
+  // V3 Phase 3: Context-Feedback-Loop — Nodes mit gutem Feedback-Score bevorzugen
+  nodes.sort((a, b) => {
+    const scoreA = getContextEffectivenessScore(a);
+    const scoreB = getContextEffectivenessScore(b);
+    const effectiveA = a.activation * (0.7 + 0.3 * scoreA);
+    const effectiveB = b.activation * (0.7 + 0.3 * scoreB);
+    return effectiveB - effectiveA;
+  });
 
   // 11.5: Collect node IDs for Cerebellum feedback
   for (const n of nodes) contextNodeIds.add(n.id);

@@ -28,7 +28,7 @@ import { calculateStressLevel } from '../regulation/stress-response.js';
 import { shouldAllowLLMCall } from '../regulation/energy.js';
 import { analyzeEnvironment } from '../senses/environment-sense.js';
 import { integrateSenses } from '../senses/integration.js';
-import { recordContextDelivery } from '../learning/communication-learner.js';
+import { recordContextModeDelivery } from '../learning/communication-learner.js';
 
 interface UserPromptInput {
   session_id?: string;
@@ -548,7 +548,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   const context = generateContext(contextMode, currentTopic, mood, signal.mode, signal.salienceMode, signal.taskMode, provider);
 
   // 25.8: Communication Learner — Context-Effektivitaet tracken
-  try { recordContextDelivery(contextMode, context?.length || 0); } catch { /* non-fatal */ }
+  try { recordContextModeDelivery(contextMode, context?.length || 0); } catch { /* non-fatal */ }
 
   let finalContext = context;
 

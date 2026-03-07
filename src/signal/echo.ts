@@ -170,14 +170,23 @@ export function applyContextFeedback(signal: FeedbackSignal): void {
     if (!row) return;
 
     const nodeIds: string[] = JSON.parse(row.value);
-    const delta = signal === 'positive' ? 0.03 : -0.02;
+    const delta = signal === 'positive' ? 0.03 : -0.05;
 
     for (const id of nodeIds.slice(0, 20)) {
       const node = getNode(id);
-      if (node) {
-        const newImportance = Math.max(0.1, Math.min(1.0, node.importance + delta));
-        updateNode(id, { importance: newImportance });
+      if (!node) continue;
+
+      const newImportance = Math.max(0.1, Math.min(1.0, node.importance + delta));
+      let meta: Record<string, unknown> = {};
+      try { meta = node.metadata ? JSON.parse(node.metadata) : {}; } catch { meta = {}; }
+
+      if (signal === 'positive') {
+        meta.context_positive = ((meta.context_positive as number) || 0) + 1;
+      } else {
+        meta.context_negative = ((meta.context_negative as number) || 0) + 1;
       }
+
+      updateNode(id, { importance: newImportance, metadata: JSON.stringify(meta) });
     }
   } catch { /* non-fatal */ }
 }
