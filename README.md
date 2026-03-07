@@ -36,7 +36,7 @@ Your AI is a genius with amnesia.
 
 BrainBase is not a memory plugin. It's an actual brain.
 
-Not metaphorically. I studied 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — and translated 92 of them into code. 18,000 lines of TypeScript. Built in 24 days.
+Not metaphorically. 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — translated into code. **92 mechanisms. 18,000 lines of TypeScript. Built in 24 days by a 17-year-old.**
 
 The AI you use (Claude, Cursor, Codex, Gemini — any of them) is just the mouth. It vibrates, it produces words. But the *brain* behind it? That's BrainBase. Same personality, same memories, same knowledge — no matter which AI you talk through.
 
@@ -264,7 +264,7 @@ Free to use. See license for details.
 
 ## Author
 
-I'm **Noah Sioly** ([@noahsioo](https://x.com/noahsioo)), 17, from Germany. I built this.
+Built by **Noah Sioly** ([@noahsioo](https://x.com/noahsioo)), 17, from Germany.
 
 ---
 
