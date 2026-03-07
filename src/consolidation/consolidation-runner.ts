@@ -655,6 +655,9 @@ export async function runConsolidation(client?: LLMClient): Promise<Consolidatio
   updateHotMemoryInDb();
   updateAllProviderFiles();
 
+  // V3 Phase 4: system_state Hygiene — verwaiste Session-Keys aufraeumen
+  try { cleanupStaleSystemState(); } catch { /* non-fatal */ }
+
   setLastConsolidation();
 
   return {
@@ -697,4 +700,31 @@ function createSnapshot(): void {
     INSERT INTO snapshots (id, date, node_count, edge_count, pattern_count, top_topics, state_hash)
     VALUES (?, ?, ?, ?, ?, ?, NULL)
   `).run(randomUUID(), dateStr, nodeCount, edgeCount, patternCount, JSON.stringify(topTopics));
+}
+
+function cleanupStaleSystemState(): number {
+  const db = getDb();
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+  const sessionPrefixes = [
+    'encoding_signal_', 'session_focus_', 'prev_topic_',
+    'stdp_entities_', 'pending_impulses_', 'energy_budget_',
+    'last_boundary_', 'ior_nodes_',
+  ];
+
+  let cleaned = 0;
+  for (const prefix of sessionPrefixes) {
+    const result = db.prepare(
+      "DELETE FROM system_state WHERE key LIKE ? AND updated_at < ?"
+    ).run(`${prefix}%`, sevenDaysAgo);
+    cleaned += result.changes;
+  }
+
+  // hunger_boost Keys aelter als 7 Tage
+  const hungerResult = db.prepare(
+    "DELETE FROM system_state WHERE key LIKE 'hunger_boost_%' AND updated_at < ?"
+  ).run(sevenDaysAgo);
+  cleaned += hungerResult.changes;
+
+  return cleaned;
 }

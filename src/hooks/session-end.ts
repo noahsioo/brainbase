@@ -30,6 +30,7 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
 
       endSession(input.session_id);
       clearScope(input.session_id);
+      cleanupSessionState(input.session_id);
     }
 
     const config = getConfig();
@@ -109,4 +110,23 @@ function parseTranscriptLocally(sessionId: string): void {
   } catch {
     // Silent - transcript parsing should never break session end
   }
+}
+
+function cleanupSessionState(sessionId: string): void {
+  try {
+    const db = getDb();
+    const keys = [
+      `encoding_signal_${sessionId}`,
+      `session_focus_${sessionId}`,
+      `prev_topic_${sessionId}`,
+      `stdp_entities_${sessionId}`,
+      `pending_impulses_${sessionId}`,
+      `energy_budget_${sessionId}`,
+      `last_boundary_${sessionId}`,
+      `ior_nodes_${sessionId}`,
+    ];
+    for (const key of keys) {
+      db.prepare("DELETE FROM system_state WHERE key = ?").run(key);
+    }
+  } catch { /* non-fatal */ }
 }
