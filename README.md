@@ -107,6 +107,7 @@ Works with any AI that supports hooks or MCP:
 | Provider | Integration | Status |
 |----------|------------|--------|
 | **Claude Code** | Hooks (SessionStart, UserPrompt, SessionEnd, PreCompact) | Full |
+| **OpenClaw** | AGENTS.md | Full |
 | **Cursor** | MCP Server | Full |
 | **Windsurf** | MCP Server | Full |
 | **Codex CLI** | Skills + Config | Full |
