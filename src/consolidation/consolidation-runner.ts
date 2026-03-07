@@ -658,6 +658,22 @@ export async function runConsolidation(client?: LLMClient): Promise<Consolidatio
   // V3 Phase 4: system_state Hygiene — verwaiste Session-Keys aufraeumen
   try { cleanupStaleSystemState(); } catch { /* non-fatal */ }
 
+  // V3 Phase 6: Consolidation-Report speichern
+  try {
+    const report = {
+      pruning: pruning.edges_pruned + pruning.nodes_deleted,
+      merge: merge.nodes_merged,
+      chunking: chunking.chunks_created,
+      dream_ran: dream.dream_edges > 0,
+      distill_ran: distill.global_updated,
+      llm_available: !!client,
+      duration_ms: Date.now() - start,
+      timestamp: Date.now(),
+    };
+    getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('last_consolidation_report', JSON.stringify(report), Date.now());
+  } catch { /* non-fatal */ }
+
   setLastConsolidation();
 
   return {

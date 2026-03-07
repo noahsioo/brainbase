@@ -7,6 +7,8 @@ import { getConfig } from '../config.js';
 import { buildPrediction, savePrediction } from '../signal/prediction.js';
 import { startNewSessionTrend } from '../regulation/allostasis.js';
 import { getScope } from '../memory/session-scope.js';
+import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
+import { createEmbeddingClient } from '../llm/embeddings.js';
 
 interface SessionStartInput {
   session_id?: string;
@@ -25,6 +27,23 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
 
     createSession('claude-code', sessionId);
     getScope(sessionId);
+
+    // V3 Phase 6: Consolidation bei >6h seit letzter
+    try {
+      const lastConsolidation = getLastConsolidation();
+      const hoursSince = (Date.now() - lastConsolidation) / (60 * 60 * 1000);
+      if (hoursSince > 6) {
+        setTimeout(() => { runConsolidation().catch(() => {}); }, 5000);
+      }
+    } catch { /* non-fatal */ }
+
+    // V3 Phase 6: Embedding-Health Check
+    try {
+      const db = getDb();
+      const embClient = createEmbeddingClient();
+      db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+        .run('embedding_status', embClient ? 'available' : 'unavailable', Date.now());
+    } catch { /* non-fatal */ }
 
     const prediction = buildPrediction();
     if (prediction) {
