@@ -251,32 +251,19 @@ export function buildConversationSummary(
   const displayReference = getPrimaryDisplayReference(memory.references, memory.current_topic);
 
   if (memory.current_topic) {
-    parts.push(`Aktuelle Session: Thema ${memory.current_topic}`);
-  } else {
-    parts.push('Aktuelle Session: noch ohne stabiles Thema');
-  }
-
-  if (memory.degraded_semantic) {
-    parts.push('Semantik aktuell degradiert');
-  }
-
-  if (displayReference) {
-    parts.push(`Verweis aktiv: ${displayReference}`);
-  }
-
-  if (ctx?.taskMode) {
-    parts.push(`Modus ${ctx.taskMode}`);
+    parts.push(`Thema: ${memory.current_topic}`);
   }
 
   if (topEntities.length > 0) {
-    parts.push(`Fokus auf ${topEntities.join(', ')}`);
+    const entityStr = topEntities.join(', ');
+    if (entityStr !== memory.current_topic) {
+      parts.push(`Fokus: ${entityStr}`);
+    }
   }
 
-  if (ctx?.mood) {
-    parts.push(`Stimmung ${ctx.mood}`);
+  if (displayReference) {
+    parts.push(`Verweis: ${displayReference}`);
   }
-
-  parts.push(`Letzte Nutzerintention: ${memory.last_message_intent}`);
 
   return `${parts.join('. ')}.`;
 }

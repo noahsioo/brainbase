@@ -89,9 +89,9 @@ export function startNewCoherenceRound(sessionId: string): void {
 const SPREAD_FACTOR = 0.5;
 const DECAY_RATE = 0.85;
 const MIN_ACTIVATION = 0.01;
-const MAX_DEPTH = 4;
+const MAX_DEPTH = 2;
 const AUTO_LINK_THRESHOLD = 3;
-const ACTIVATION_BUDGET = 50;
+const ACTIVATION_BUDGET = 20;
 const INHIBITION_TOP_N = 20;
 const RECENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RECENCY_BOOST = 0.2;
@@ -384,7 +384,14 @@ export function activateNode(nodeId: string, energy = 1.0, sessionId = 'default'
     } catch { /* skip */ }
   }
 
-  const totalEnergy = Math.min(1.0, (energy + boost) * refractoryDampen);
+  let totalEnergy = Math.min(1.0, (energy + boost) * refractoryDampen);
+
+  // Hub Dampening: Nodes mit >20 Edges bekommen reduzierte Activation
+  const edgesForHub = getEdgesForNode(nodeId);
+  if (edgesForHub.length > 20) {
+    const hubDampen = Math.max(0.3, 1.0 - (edgesForHub.length - 20) * 0.03);
+    totalEnergy *= hubDampen;
+  }
 
   const newActivationCount = (node.activation_count || 0) + 1;
 
@@ -467,8 +474,8 @@ function spread(
 ): void {
   // M52: Gehirnwellen — mode modulates depth and budget (session-scoped)
   const scope = getScope(sessionId);
-  const effectiveMaxDepth = scope.systemMode === 'gamma' ? 3 : scope.systemMode === 'theta' ? 5 : MAX_DEPTH;
-  const effectiveBudget = scope.systemMode === 'gamma' ? 30 : scope.systemMode === 'theta' ? 70 : ACTIVATION_BUDGET;
+  const effectiveMaxDepth = scope.systemMode === 'gamma' ? 2 : scope.systemMode === 'theta' ? 3 : MAX_DEPTH;
+  const effectiveBudget = scope.systemMode === 'gamma' ? 15 : scope.systemMode === 'theta' ? 30 : ACTIVATION_BUDGET;
 
   if (depth >= effectiveMaxDepth) return;
   if (activatedNodes.size >= effectiveBudget) return;

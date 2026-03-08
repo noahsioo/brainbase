@@ -308,6 +308,11 @@ const GARBAGE_PATTERNS = [
   /\bthe user (?:has been|was) (?:working|coding|building|developing)\b/i,
   /\buser has ideas about\b/i,
   /\buser discussed\b/i,
+  /^user (?:is|was|has|seems?|appears?|feels?|wants?|thinks?|believes?|experiences?)/i,
+  /^the user /i,
+  /^lovis (?:is|was|has) (?:been )?(?:working|building|exploring|discussing|considering)/i,
+  /\buser (?:asked|mentioned|noted|said|stated|indicated|expressed|shared|revealed|admitted)\b/i,
+  /\b(?:seems|appears) to (?:be|have|want|like|prefer|think|believe)\b/i,
 ];
 
 export function isGarbage(content: string): boolean {

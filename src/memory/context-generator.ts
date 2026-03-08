@@ -238,8 +238,8 @@ function getContextRepeatPenalty(node: Node, history: ContextOutputWindow[]): nu
   const recentOutputWeight = getRecentOutputWeight(node.id, history);
   if (recentOutputWeight <= 0) return 1;
 
-  const floor = isRepeatPenaltyProtected(node) ? 0.72 : 0.38;
-  return Math.max(floor, 1 - recentOutputWeight * 0.35);
+  const floor = isRepeatPenaltyProtected(node) ? 0.5 : 0.15;
+  return Math.max(floor, 1 - recentOutputWeight * 0.45);
 }
 
 function getActiveContextNodeScore(
@@ -933,13 +933,11 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
 
   if (sessionTopic) {
     const relevant = nodes.filter(n => isTopicRelevant(n, sessionTopic));
-    const irrelevant = nodes.filter(n => !isTopicRelevant(n, sessionTopic));
-
-    // M30: Focus mode → only topic-relevant nodes (strict filtering)
-    if (salience === 'focus') {
-      nodes = sortByContextScore(relevant);
-    } else {
-      nodes = [...sortByContextScore(relevant), ...sortByContextScore(irrelevant)];
+    nodes = sortByContextScore(relevant);
+    // Fallback: wenn topic-relevant zu wenig (<3), Top irrelevant dazunehmen
+    if (nodes.length < 3) {
+      const irrelevant = nodes.filter(n => !isTopicRelevant(n, sessionTopic));
+      nodes = [...nodes, ...sortByContextScore(irrelevant).slice(0, 3 - nodes.length)];
     }
   } else {
     nodes = sortByContextScore(nodes);
@@ -2132,13 +2130,16 @@ export function generateContext(
     if (failureWarning) sections.push(failureWarning);
   }
 
-  if (sessionPhaseProfile.showDistilledProfile) {
-    const distilledProfile = buildDistilledProfileSlot(budget.entityProfile);
-    if (distilledProfile) sections.push(distilledProfile);
-  }
+  // Entity Profile nur in bootstrap Phase (erste 2 Nachrichten)
+  if (sessionPhaseProfile.phase === 'bootstrap') {
+    if (sessionPhaseProfile.showDistilledProfile) {
+      const distilledProfile = buildDistilledProfileSlot(budget.entityProfile);
+      if (distilledProfile) sections.push(distilledProfile);
+    }
 
-  const entityProfile = buildEntityProfileSlot(budget.entityProfile, effectiveEmpathyMode, currentTopic, sessionId);
-  if (entityProfile) sections.push(entityProfile);
+    const entityProfile = buildEntityProfileSlot(budget.entityProfile, effectiveEmpathyMode, currentTopic, sessionId);
+    if (entityProfile) sections.push(entityProfile);
+  }
 
   const activeContext = buildActiveContextSlot(budget.activeContext, currentTopic, effectiveCurrentMood, salienceMode, sessionId);
   if (activeContext) sections.push(activeContext);

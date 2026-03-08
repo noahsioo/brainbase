@@ -1,4 +1,4 @@
-import { getDb, getNode, updateNode } from '../memory/store.js';
+import { getDb, getNode, getSessionActivationRows, updateNode } from '../memory/store.js';
 import { recordProviderFeedback } from '../learning/ai-profiles.js';
 import { getSystemState, setSystemState } from '../memory/cold-start.js';
 import { markRecentOutcomesSuccess } from '../learning/outcome-tracker.js';
@@ -75,17 +75,36 @@ export function applyFeedbackOutcome(signal: FeedbackSignal, sessionId: string):
   }
 }
 
-export function applyFeedbackToRecentNodes(signal: FeedbackSignal): number {
+function getRecentSessionNodes(
+  sessionId: string,
+  limit = 10,
+  minActivation = 0.1,
+): Array<{ id: string; confidence: number; metadata: string | null; type: string }> {
+  return getSessionActivationRows(sessionId, limit, minActivation)
+    .map(row => getNode(row.node_id))
+    .filter((node): node is NonNullable<typeof node> => Boolean(node))
+    .map(node => ({
+      id: node.id,
+      confidence: node.confidence,
+      metadata: node.metadata,
+      type: node.type,
+    }));
+}
+
+export function applyFeedbackToRecentNodes(signal: FeedbackSignal, sessionId?: string): number {
   if (signal === 'neutral') return 0;
 
   const db = getDb();
-  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-
-  const recentNodes = db.prepare(`
-    SELECT id, confidence FROM nodes
-    WHERE last_activated > ? AND activation > 0
-    ORDER BY activation DESC LIMIT 10
-  `).all(fiveMinAgo) as Array<{ id: string; confidence: number }>;
+  const recentNodes = sessionId
+    ? getRecentSessionNodes(sessionId, 10, 0.01).map(node => ({ id: node.id, confidence: node.confidence }))
+    : (() => {
+        const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+        return db.prepare(`
+          SELECT id, confidence FROM nodes
+          WHERE last_activated > ? AND activation > 0
+          ORDER BY activation DESC LIMIT 10
+        `).all(fiveMinAgo) as Array<{ id: string; confidence: number }>;
+      })();
 
   if (recentNodes.length === 0) return 0;
 
@@ -195,15 +214,19 @@ export function detectEmpathyMode(text: string, mood: Mood): EmpathyMode {
 }
 
 // M25: Somatic Markers — accumulate emotional valence on entities over time
-export function applySomaticMarkers(signal: FeedbackSignal): void {
+export function applySomaticMarkers(signal: FeedbackSignal, sessionId?: string): void {
   if (signal === 'neutral') return;
 
   const db = getDb();
-  const recentEntities = db.prepare(`
-    SELECT id, metadata FROM nodes
-    WHERE type = 'entity' AND activation > 0.1
-    ORDER BY activation DESC LIMIT 10
-  `).all() as Array<{ id: string; metadata: string | null }>;
+  const recentEntities = sessionId
+    ? getRecentSessionNodes(sessionId, 10, 0.1)
+        .filter(node => node.type === 'entity')
+        .map(node => ({ id: node.id, metadata: node.metadata }))
+    : db.prepare(`
+        SELECT id, metadata FROM nodes
+        WHERE type = 'entity' AND activation > 0.1
+        ORDER BY activation DESC LIMIT 10
+      `).all() as Array<{ id: string; metadata: string | null }>;
 
   const delta = signal === 'positive' ? 0.1 : -0.1;
 

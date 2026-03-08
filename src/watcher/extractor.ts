@@ -147,7 +147,10 @@ Fact types: preference, fact, decision, task, project, learning, identity, insig
 8. Max 5 entities per message. If more → keep only the most important
 9. You can UPDATE existing knowledge via the "updates" array
 10. Stream-of-consciousness monologues without concrete info → NOTHING
-11. Meta-comments about the conversation itself → NOTHING`;
+11. Meta-comments about the conversation itself → NOTHING
+12. If the messages are just continuing a known conversation without NEW concrete facts → nothing_new: true
+13. Repeating or rephrasing something already known → nothing_new: true
+14. In doubt: nothing_new: true. It's MUCH better to miss something than to store garbage.`;
 
   if (frustration) {
     return base + `
@@ -250,12 +253,42 @@ function getRecentMessages(sessionId: string, limit: number = 10): string {
   }
 }
 
+function isSubstantiveMessage(message: string): boolean {
+  const lines = message.split('\n---\n');
+  const lastMessage = lines[lines.length - 1] || message;
+  const words = lastMessage.trim().split(/\s+/).filter(w => w.length > 2);
+
+  if (words.length < 3) return false;
+
+  const confirmPatterns = /^(ja|nein|ok|okay|genau|perfekt|passt|gut|weiter|mach|continue|yes|no|sure|right|exactly|nope|yep)$/i;
+  if (words.length <= 3 && words.every(w => confirmPatterns.test(w))) return false;
+
+  return true;
+}
+
 export async function extractFromMessageDetailed(
   client: LLMClient,
   message: string,
   sessionId: string,
   flags?: KeywordFlags,
 ): Promise<MessageExtractionResult> {
+  if (!isSubstantiveMessage(message)) {
+    recordLLMCall(sessionId);
+    return {
+      nodes: [],
+      semantic: {
+        nothing_new: true,
+        entities: [],
+        relations: [],
+        topic: '',
+        topic_confidence: 0,
+        intent: 'other',
+        facts: [],
+        references: [],
+      },
+    };
+  }
+
   const existingNodes = searchNodes(message, 15);
 
   const systemPrompt = buildSystemPrompt(flags?.frustration ?? false);
