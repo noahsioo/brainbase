@@ -18,9 +18,9 @@ const MONTH_MAP: Record<string, number> = {
   // Deutsch
   januar: 0, februar: 1, maerz: 2, märz: 2, april: 3, mai: 4, juni: 5,
   juli: 6, august: 7, september: 8, oktober: 9, november: 10, dezember: 11,
-  // Englisch
-  january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-  july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+  // Englisch (nur die, die sich von Deutsch unterscheiden)
+  january: 0, february: 1, march: 2, may: 4, june: 5,
+  july: 6, october: 9, december: 11,
 };
 
 const NUMBER_WORDS: Record<string, number> = {
