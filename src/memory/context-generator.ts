@@ -1934,16 +1934,14 @@ function buildTipOfTongueSlot(budget: number, sessionTopic?: string, sessionId?:
           node.importance >= 0.5,
         )
         .slice(0, 5)
-    : (() => {
-        const db = getDb();
-        return db.prepare(`
-          SELECT * FROM nodes
-          WHERE activation BETWEEN 0.02 AND 0.15
-          AND type IN ('entity', 'fact', 'preference', 'decision', 'project')
-          AND importance >= 0.5
-          ORDER BY activation DESC LIMIT 5
-        `).all() as Node[];
-      })();
+    : getActivatedNodes(20)
+        .filter(node =>
+          node.activation >= 0.02 &&
+          node.activation <= 0.15 &&
+          ['entity', 'fact', 'preference', 'decision', 'project'].includes(node.type) &&
+          node.importance >= 0.5,
+        )
+        .slice(0, 5);
 
   if (weakNodes.length === 0) return '';
 
@@ -1984,16 +1982,14 @@ function buildBackgroundThoughtsSlot(budget: number, primaryNodes: Node[], sessi
           ['entity', 'fact', 'preference'].includes(node.type),
         )
         .slice(0, 5)
-    : (() => {
-        const db = getDb();
-        return db.prepare(`
-          SELECT * FROM nodes
-          WHERE activation BETWEEN 0.05 AND 0.2
-            AND importance > 0.3
-            AND type IN ('entity', 'fact', 'preference')
-          ORDER BY activation DESC LIMIT 5
-        `).all() as Node[];
-      })();
+    : getActivatedNodes(30)
+        .filter(node =>
+          node.activation >= 0.05 &&
+          node.activation <= 0.2 &&
+          node.importance > 0.3 &&
+          ['entity', 'fact', 'preference'].includes(node.type),
+        )
+        .slice(0, 5);
 
   const filtered = backgroundNodes.filter(n => {
     if (primaryIds.has(n.id)) return false;

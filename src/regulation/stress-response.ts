@@ -14,14 +14,6 @@ function getStressLevelKey(sessionId?: string): string {
 }
 
 function getActiveContradictionCount(sessionId?: string): number {
-  if (!sessionId) {
-    const db = getDb();
-    return (db.prepare(`
-      SELECT COUNT(*) as c FROM edges WHERE type = 'contradicts'
-      AND source_id IN (SELECT id FROM nodes WHERE activation > 0.1)
-    `).get() as { c: number }).c;
-  }
-
   const activeNodes = getActivatedNodes(20, sessionId).filter(node => node.activation > 0.1);
   if (activeNodes.length === 0) return 0;
 

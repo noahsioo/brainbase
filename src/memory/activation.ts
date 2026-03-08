@@ -27,6 +27,7 @@ import { getDevelopmentPhase } from './cold-start.js';
 import { getMetaplasticLearningRate, getRetrogradeDampening } from '../regulation/feedback-channels.js';
 import { getHubDecayFactor } from '../regulation/hub-protection.js';
 import { getScope } from './session-scope.js';
+import { getSessionAttentionState } from './session-runtime-state.js';
 
 // M36: Current encoding context for retrieval matching (session-scoped)
 export function setCurrentEncodingContext(ctx: { mood?: string; topic?: string; provider?: string } | null, sessionId: string): void {
@@ -184,6 +185,48 @@ function materializeSessionActivationRow(row: SessionActivationRow): Node | null
   const node = getNode(row.node_id);
   if (!node) return null;
   return materializeNodeActivation(node, row.activation);
+}
+
+function getAggregatedSessionActivationRows(
+  limit?: number,
+  minActivation = MIN_ACTIVATION,
+): SessionActivationRow[] {
+  const db = getDb();
+  let query = `
+    SELECT
+      '__aggregate__' as session_id,
+      node_id,
+      MAX(activation) as activation,
+      MAX(activated_at) as activated_at
+    FROM session_activations
+    WHERE activation >= ?
+    GROUP BY node_id
+    ORDER BY activation DESC, activated_at DESC
+  `;
+
+  if (typeof limit === 'number' && Number.isFinite(limit)) {
+    query += ' LIMIT ?';
+    return db.prepare(query).all(minActivation, limit) as SessionActivationRow[];
+  }
+
+  return db.prepare(query).all(minActivation) as SessionActivationRow[];
+}
+
+function getActivatedNodesFromAggregatedOverlay(
+  limit = 20,
+  minActivation = MIN_ACTIVATION,
+): Node[] {
+  if (limit <= 0) return [];
+
+  const fetchLimit = Math.max(limit * 3, limit);
+  const rows = getAggregatedSessionActivationRows(fetchLimit, minActivation);
+  if (rows.length === 0) return [];
+
+  const nodes = rows
+    .map(materializeSessionActivationRow)
+    .filter((node): node is Node => node !== null);
+
+  return finalizeActivatedNodeSelection(nodes, limit);
 }
 
 function getNodeWithSessionActivation(nodeId: string, sessionId: string): Node | null {
@@ -785,15 +828,25 @@ export function activateByQuery(query: string, energy = 1.0, sessionId = 'defaul
   };
 }
 
-export function decayAllActivations(): number {
+export function decayAllActivations(sessionId?: string): number {
   const db = getDb();
-  const activeNodes = db.prepare(
-    'SELECT id, activation, activation_count FROM nodes WHERE activation > 0',
-  ).all() as Array<{ id: string; activation: number; activation_count: number }>;
+  const activeRows = sessionId
+    ? db.prepare(`
+        SELECT sa.session_id, sa.node_id as id, sa.activation, n.activation_count
+        FROM session_activations sa
+        JOIN nodes n ON n.id = sa.node_id
+        WHERE sa.session_id = ? AND sa.activation > 0
+      `).all(sessionId) as Array<{ session_id: string; id: string; activation: number; activation_count: number }>
+    : db.prepare(`
+        SELECT sa.session_id, sa.node_id as id, sa.activation, n.activation_count
+        FROM session_activations sa
+        JOIN nodes n ON n.id = sa.node_id
+        WHERE sa.activation > 0
+      `).all() as Array<{ session_id: string; id: string; activation: number; activation_count: number }>;
 
   let affected = 0;
 
-  for (const row of activeNodes) {
+  for (const row of activeRows) {
     // Decay resistance: frequently activated nodes decay slower
     // activation_count 0-2: normal decay (0.85)
     // activation_count 3-14: slow decay (0.90)
@@ -809,11 +862,7 @@ export function decayAllActivations(): number {
     effectiveDecay *= getHubDecayFactor(row.id);
 
     const decayed = row.activation * effectiveDecay;
-    if (decayed < MIN_ACTIVATION) {
-      updateNode(row.id, { activation: 0 });
-    } else {
-      updateNode(row.id, { activation: decayed });
-    }
+    setSessionActivationValue(row.id, row.session_id, decayed < MIN_ACTIVATION ? 0 : decayed);
     affected++;
   }
 
@@ -839,11 +888,7 @@ export function getActivatedNodes(limit = 20, sessionId?: string): Node[] {
     return getActivatedNodesFromSessionOverlay(sessionId, limit);
   }
 
-  const db = getDb();
-  const nodes = db.prepare(
-    'SELECT * FROM nodes WHERE activation > 0 ORDER BY activation DESC LIMIT ?',
-  ).all(limit * 2) as Node[];
-  return finalizeActivatedNodeSelection(nodes, limit);
+  return getActivatedNodesFromAggregatedOverlay(limit);
 }
 
 function extractWords(text: string): Set<string> {
@@ -1005,7 +1050,29 @@ export function primeActivations(factor: number = 0.3, sessionId?: string): void
       );
     }
   } else {
-    db.prepare('UPDATE nodes SET activation = activation * ? WHERE activation > 0').run(factor);
+    const rows = getAggregatedSessionActivationRows(undefined, MIN_ACTIVATION);
+    const updated = new Set<string>();
+    for (const row of rows) {
+      const sessionRows = db.prepare(`
+        SELECT session_id, node_id, activation, activated_at
+        FROM session_activations
+        WHERE node_id = ? AND activation >= ?
+      `).all(row.node_id, MIN_ACTIVATION) as SessionActivationRow[];
+
+      for (const sessionRow of sessionRows) {
+        const key = `${sessionRow.session_id}:${sessionRow.node_id}`;
+        if (updated.has(key)) continue;
+        updated.add(key);
+
+        const primed = sessionRow.activation * factor;
+        setSessionActivationValue(
+          sessionRow.node_id,
+          sessionRow.session_id,
+          primed < MIN_ACTIVATION ? 0 : primed,
+          sessionRow.activated_at,
+        );
+      }
+    }
   }
 
   // 16.3: STP Cleanup — alte Eintraege entfernen
@@ -1297,10 +1364,9 @@ export function activateByConversation(
   // 15.3b: Orienting modulates activation budget (focused → fewer, broad → more)
   let orientingBudget = ACTIVATION_BUDGET;
   try {
-    const orientRow = getDb().prepare("SELECT value FROM system_state WHERE key = 'orienting_level'")
-      .get() as { value: string } | undefined;
-    if (orientRow) {
-      const orienting = parseFloat(orientRow.value);
+    const attentionState = getSessionAttentionState(sessionId);
+    if (attentionState) {
+      const orienting = attentionState.orienting;
       orientingBudget = Math.round(30 + (1 - orienting) * 40);
     }
   } catch { /* fallback to default */ }
@@ -1389,10 +1455,9 @@ export function getCurrentlyActivatedEntityIds(limit = 10, sessionId?: string): 
     return finalizeActivatedNodeSelection(nodes, limit).map(node => node.id);
   }
 
-  const db = getDb();
-  return (db.prepare(
-    "SELECT id FROM nodes WHERE type = 'entity' AND activation > 0.1 ORDER BY activation DESC LIMIT ?"
-  ).all(limit) as Array<{ id: string }>).map(r => r.id);
+  const aggregated = getActivatedNodes(Math.max(limit * 4, limit))
+    .filter(node => node.type === 'entity' && node.activation > 0.1);
+  return aggregated.slice(0, limit).map(node => node.id);
 }
 
 export function applySTDP(previousEntityIds: string[], currentEntityIds: string[]): void {

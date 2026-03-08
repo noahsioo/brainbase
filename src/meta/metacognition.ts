@@ -1,5 +1,27 @@
 import { getDb, getNode, getSessionActivationRows, type Node } from '../memory/store.js';
 
+function getAggregatedActivationSamples(): Array<{ activation: number; importance: number }> {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT
+      sa.node_id,
+      MAX(sa.activation) as activation
+    FROM session_activations sa
+    WHERE sa.activation >= 0.02
+    GROUP BY sa.node_id
+    ORDER BY activation DESC
+    LIMIT 400
+  `).all() as Array<{ node_id: string; activation: number }>;
+
+  return rows
+    .map(row => {
+      const node = getNode(row.node_id);
+      if (!node) return null;
+      return { activation: row.activation, importance: node.importance };
+    })
+    .filter((entry): entry is { activation: number; importance: number } => entry !== null);
+}
+
 // ── 15.1: Feeling of Knowing ────────────────────────────────
 
 export interface FOKSignal {
@@ -28,14 +50,9 @@ export function detectFeelingOfKnowing(topic?: string, sessionId?: string): FOKS
     weakCount = activated.filter(node => node.activation >= 0.02 && node.activation <= 0.15 && node.importance >= 0.4).length;
     strongCount = activated.filter(node => node.activation > 0.3).length;
   } else {
-    const db = getDb();
-    weakCount = (db.prepare(
-      "SELECT COUNT(*) as c FROM nodes WHERE activation BETWEEN 0.02 AND 0.15 AND importance >= 0.4"
-    ).get() as { c: number }).c;
-
-    strongCount = (db.prepare(
-      "SELECT COUNT(*) as c FROM nodes WHERE activation > 0.3"
-    ).get() as { c: number }).c;
+    const activated = getAggregatedActivationSamples();
+    weakCount = activated.filter(node => node.activation >= 0.02 && node.activation <= 0.15 && node.importance >= 0.4).length;
+    strongCount = activated.filter(node => node.activation > 0.3).length;
   }
 
   if (weakCount < 3) return null;

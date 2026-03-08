@@ -101,20 +101,47 @@ function getRecentSessionNodes(
     }));
 }
 
+function getRecentAggregatedNodes(
+  limit = 10,
+  minActivation = 0.1,
+  since = Date.now() - 5 * 60 * 1000,
+): Array<{ id: string; confidence: number; metadata: string | null; type: string }> {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT
+      sa.node_id,
+      MAX(sa.activation) as activation,
+      MAX(sa.activated_at) as activated_at
+    FROM session_activations sa
+    WHERE sa.activation >= ? AND sa.activated_at > ?
+    GROUP BY sa.node_id
+    ORDER BY activation DESC, activated_at DESC
+    LIMIT ?
+  `).all(minActivation, since, limit * 3) as Array<{
+    node_id: string;
+    activation: number;
+    activated_at: number;
+  }>;
+
+  return rows
+    .map(row => getNode(row.node_id))
+    .filter((node): node is NonNullable<typeof node> => Boolean(node))
+    .slice(0, limit)
+    .map(node => ({
+      id: node.id,
+      confidence: node.confidence,
+      metadata: node.metadata,
+      type: node.type,
+    }));
+}
+
 export function applyFeedbackToRecentNodes(signal: FeedbackSignal, sessionId?: string): number {
   if (signal === 'neutral') return 0;
 
   const db = getDb();
   const recentNodes = sessionId
     ? getRecentSessionNodes(sessionId, 10, 0.01).map(node => ({ id: node.id, confidence: node.confidence }))
-    : (() => {
-        const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-        return db.prepare(`
-          SELECT id, confidence FROM nodes
-          WHERE last_activated > ? AND activation > 0
-          ORDER BY activation DESC LIMIT 10
-        `).all(fiveMinAgo) as Array<{ id: string; confidence: number }>;
-      })();
+    : getRecentAggregatedNodes(10, 0.01).map(node => ({ id: node.id, confidence: node.confidence }));
 
   if (recentNodes.length === 0) return 0;
 
@@ -232,11 +259,9 @@ export function applySomaticMarkers(signal: FeedbackSignal, sessionId?: string):
     ? getRecentSessionNodes(sessionId, 10, 0.1)
         .filter(node => node.type === 'entity')
         .map(node => ({ id: node.id, metadata: node.metadata }))
-    : db.prepare(`
-        SELECT id, metadata FROM nodes
-        WHERE type = 'entity' AND activation > 0.1
-        ORDER BY activation DESC LIMIT 10
-      `).all() as Array<{ id: string; metadata: string | null }>;
+    : getRecentAggregatedNodes(10, 0.1)
+        .filter(node => node.type === 'entity')
+        .map(node => ({ id: node.id, metadata: node.metadata }));
 
   const delta = signal === 'positive' ? 0.1 : -0.1;
 

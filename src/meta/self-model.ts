@@ -1,5 +1,8 @@
 import { getDb } from '../memory/store.js';
 
+// Global by design: the self-model represents whole-brain development,
+// not the state of a single live conversation.
+
 export interface SelfModel {
   total_nodes: number;
   total_edges: number;

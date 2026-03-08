@@ -4,6 +4,9 @@
 
 import { getDb } from '../memory/store.js';
 
+// Global by design: interoception tracks whole-system health and mood,
+// not per-session conversational state.
+
 export interface SystemHealth {
   energy: number;        // 0-1: hoch = mehr speichern, niedrig = nur Wichtiges
   saturation: number;    // 0-1: wie voll ist das System
