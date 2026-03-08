@@ -824,6 +824,12 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     sessionId,
     !shouldPersistState,
   );
+  diagnosticLog('CTX', {
+    mode: contextMode,
+    length: context?.length || 0,
+    tokens: Math.ceil((context?.length || 0) / 4),
+    preview: context?.slice(0, 200),
+  });
 
   // 25.8: Communication Learner — Context-Effektivitaet tracken
   if (shouldPersistState) {

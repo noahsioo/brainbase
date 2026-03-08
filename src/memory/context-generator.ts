@@ -627,9 +627,14 @@ function buildLegacyCoreSlot(budget: number, sessionTopic?: string, sessionId?: 
 const UNIVERSAL_TYPES = new Set(['core', 'identity', 'preference', 'style_dna']);
 
 let _sessionTopicVec: Float32Array | null = null;
+let _sessionMessageVec: Float32Array | null = null;
 
 export function setSessionTopicEmbedding(vector: Float32Array | null): void {
   _sessionTopicVec = vector;
+}
+
+export function setSessionMessageEmbedding(vector: Float32Array | null): void {
+  _sessionMessageVec = vector;
 }
 
 function isTopicRelevant(node: Node, topic: string | undefined): boolean {
