@@ -45,22 +45,26 @@ export interface ThalamicSignal {
   systemHealth: SystemHealth;
 }
 
-// ── Sensory Gating (session-local entity repetition dampening) ──
-
-let sessionEntityCounts = new Map<string, number>();
-let currentSessionId = '';
+// V6-6: Per-session entity repetition tracking (fixes single-session bug)
+const perSessionEntityCounts = new Map<string, Map<string, number>>();
 
 function getSensoryGating(
   entities: string[],
   sessionId: string,
   readOnly = false,
 ): Record<string, number> {
-  if (readOnly) {
-    if (sessionId !== currentSessionId) return {};
+  let counts = perSessionEntityCounts.get(sessionId);
+  if (!counts) {
+    if (readOnly) return {};
+    counts = new Map();
+    perSessionEntityCounts.set(sessionId, counts);
+  }
 
-    const dampening: Record<string, number> = {};
+  const dampening: Record<string, number> = {};
+
+  if (readOnly) {
     for (const entity of entities) {
-      const count = sessionEntityCounts.get(entity) || 0;
+      const count = counts.get(entity) || 0;
       if (count > 2) {
         dampening[entity] = Math.max(0.3, 1.0 - (count - 2) * 0.15);
       }
@@ -68,20 +72,18 @@ function getSensoryGating(
     return dampening;
   }
 
-  if (sessionId !== currentSessionId) {
-    sessionEntityCounts.clear();
-    currentSessionId = sessionId;
-  }
-
-  const dampening: Record<string, number> = {};
   for (const entity of entities) {
-    const count = (sessionEntityCounts.get(entity) || 0) + 1;
-    sessionEntityCounts.set(entity, count);
+    const count = (counts.get(entity) || 0) + 1;
+    counts.set(entity, count);
     if (count > 2) {
       dampening[entity] = Math.max(0.3, 1.0 - (count - 2) * 0.15);
     }
   }
   return dampening;
+}
+
+export function clearThalamicSessionState(sessionId: string): void {
+  perSessionEntityCounts.delete(sessionId);
 }
 
 // ── Info Density (migrated from signal-strength.ts) ─────────

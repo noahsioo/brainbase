@@ -1962,15 +1962,26 @@ function buildExamplesSlot(budget: number, topic?: string, sessionId?: string): 
 
 // ── Tip-of-the-Tongue (M50) ─────────────────────────────────
 
-function buildTipOfTongueSlot(budget: number, sessionTopic?: string): string {
-  const db = getDb();
-  const weakNodes = db.prepare(`
-    SELECT * FROM nodes
-    WHERE activation BETWEEN 0.02 AND 0.15
-    AND type IN ('entity', 'fact', 'preference', 'decision', 'project')
-    AND importance >= 0.5
-    ORDER BY activation DESC LIMIT 5
-  `).all() as Node[];
+function buildTipOfTongueSlot(budget: number, sessionTopic?: string, sessionId?: string): string {
+  const weakNodes = sessionId
+    ? getActivatedNodes(20, sessionId)
+        .filter(node =>
+          node.activation >= 0.02 &&
+          node.activation <= 0.15 &&
+          ['entity', 'fact', 'preference', 'decision', 'project'].includes(node.type) &&
+          node.importance >= 0.5,
+        )
+        .slice(0, 5)
+    : (() => {
+        const db = getDb();
+        return db.prepare(`
+          SELECT * FROM nodes
+          WHERE activation BETWEEN 0.02 AND 0.15
+          AND type IN ('entity', 'fact', 'preference', 'decision', 'project')
+          AND importance >= 0.5
+          ORDER BY activation DESC LIMIT 5
+        `).all() as Node[];
+      })();
 
   if (weakNodes.length === 0) return '';
 
@@ -1999,17 +2010,28 @@ function buildTipOfTongueSlot(budget: number, sessionTopic?: string): string {
 
 // ── Background Thoughts (19.2: Paralleles Bewusstsein) ──────
 
-function buildBackgroundThoughtsSlot(budget: number, primaryNodes: Node[]): string {
-  const db = getDb();
+function buildBackgroundThoughtsSlot(budget: number, primaryNodes: Node[], sessionId?: string): string {
   const primaryIds = new Set(primaryNodes.map(n => n.id));
 
-  const backgroundNodes = db.prepare(`
-    SELECT * FROM nodes
-    WHERE activation BETWEEN 0.05 AND 0.2
-      AND importance > 0.3
-      AND type IN ('entity', 'fact', 'preference')
-    ORDER BY activation DESC LIMIT 5
-  `).all() as Node[];
+  const backgroundNodes = sessionId
+    ? getActivatedNodes(30, sessionId)
+        .filter(node =>
+          node.activation >= 0.05 &&
+          node.activation <= 0.2 &&
+          node.importance > 0.3 &&
+          ['entity', 'fact', 'preference'].includes(node.type),
+        )
+        .slice(0, 5)
+    : (() => {
+        const db = getDb();
+        return db.prepare(`
+          SELECT * FROM nodes
+          WHERE activation BETWEEN 0.05 AND 0.2
+            AND importance > 0.3
+            AND type IN ('entity', 'fact', 'preference')
+          ORDER BY activation DESC LIMIT 5
+        `).all() as Node[];
+      })();
 
   const filtered = backgroundNodes.filter(n => {
     if (primaryIds.has(n.id)) return false;
@@ -2071,7 +2093,7 @@ export function generateContext(
   const sessionPhaseProfile = getSessionPhaseBudgetProfile(sessionId, effectiveContextSignal, sessionWorkingMemory);
 
   // 13.1: User Model — expertise-based budget adjustment
-  const userModel = buildUserModel();
+  const userModel = buildUserModel(sessionId);
   const topicExpertise = getTopicExpertise(userModel, currentTopic);
 
   if (topicExpertise > 0.7) {
@@ -2265,7 +2287,7 @@ export function generateContext(
   // Extras — nur periodisch oder bei Bedarf
   if (slots.showExtras && (effectiveMode === 'MAXIMUM' || effectiveMode === 'STANDARD')) {
     const activatedNodes = getActivatedNodes(30, sessionId);
-    const backgroundThoughts = buildBackgroundThoughtsSlot(budget.serendipity, activatedNodes);
+    const backgroundThoughts = buildBackgroundThoughtsSlot(budget.serendipity, activatedNodes, sessionId);
     if (backgroundThoughts) sections.push(backgroundThoughts);
 
     const ghostCtx = buildGhostContextSlot(budget.extras, currentTopic, topicExpertise, sessionPhaseProfile.phase);
@@ -2308,7 +2330,7 @@ export function generateContext(
     const examples = buildExamplesSlot(exampleBudget, currentTopic, sessionId);
     if (examples) sections.push(examples);
 
-    const tot = buildTipOfTongueSlot(budget.extras, currentTopic);
+    const tot = buildTipOfTongueSlot(budget.extras, currentTopic, sessionId);
     if (tot) sections.push(tot);
 
     const prospection = buildProspectionSlot(budget.extras, currentTopic, sessionId, readOnly);

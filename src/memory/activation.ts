@@ -353,7 +353,7 @@ export function activateNode(nodeId: string, energy = 1.0, sessionId = 'default'
     boost = RECENCY_BOOST;
   }
 
-  const mood = getCurrentMood();
+  const mood = getCurrentMood(sessionId);
   if (mood !== 'neutral' && node.emotional_tag === mood) {
     boost += EMOTIONAL_BIAS_BOOST;
   }

@@ -7,8 +7,8 @@ import {
   MEMORY_DIR,
   PROVIDER_PATHS,
 } from '../config.js';
-import { getDb, getStats, searchNodes, getNodes } from '../memory/store.js';
-import { activateNode, getActivatedNodes } from '../memory/activation.js';
+import { getDb, getStats, searchNodes, getNodes, createSession } from '../memory/store.js';
+import { activateNode, clearSessionActivationOverlay } from '../memory/activation.js';
 import { calculateSignalStrength, GATE_LLM, GATE_IGNORE } from '../signal/signal-strength.js';
 import { getConfig } from '../config.js';
 
@@ -187,7 +187,9 @@ export const verifyCommand = new Command('verify')
         const coreNodes = getNodes({ type: 'core', limit: 1 });
         if (coreNodes.length > 0) {
           const testNode = coreNodes[0];
-          const result = activateNode(testNode.id, 0.8);
+          const verifySessionId = `verify-activation-${Date.now()}`;
+          createSession('verify', verifySessionId);
+          const result = activateNode(testNode.id, 0.8, verifySessionId);
 
           activationResults.push(check(
             'Activation',
@@ -214,6 +216,13 @@ export const verifyCommand = new Command('verify')
                 `"${neighbor.content.slice(0, 40)}" activation: ${neighbor.activation.toFixed(3)}`,
               ));
             }
+          }
+
+          try {
+            clearSessionActivationOverlay(verifySessionId);
+            getDb().prepare('DELETE FROM sessions WHERE id = ?').run(verifySessionId);
+          } catch {
+            // non-fatal cleanup
           }
         } else {
           activationResults.push(check('Activation', false, 'Keine Core Nodes zum testen'));

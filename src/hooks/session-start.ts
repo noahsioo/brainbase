@@ -99,12 +99,12 @@ function getLastSessionSummary(): string | null {
   try {
     const db = getDb();
 
-    // Get last completed session
+    // V6-5: Get last completed session — NOW includes summary column
     const lastSession = db.prepare(`
-      SELECT id, message_count, topics, started_at, ended_at
+      SELECT id, message_count, topics, started_at, ended_at, summary
       FROM sessions WHERE ended_at IS NOT NULL
       ORDER BY ended_at DESC LIMIT 1
-    `).get() as { id: string; message_count: number; topics: string; started_at: number; ended_at: number } | undefined;
+    `).get() as { id: string; message_count: number; topics: string; started_at: number; ended_at: number; summary: string | null } | undefined;
 
     if (!lastSession) return null;
 
@@ -115,23 +115,27 @@ function getLastSessionSummary(): string | null {
     const minutes = Math.round(duration / 60000);
     parts.push(`Letzte Session: ${lastSession.message_count} Nachrichten, ${minutes} Min.`);
 
-    // Topics
-    try {
-      const topics = JSON.parse(lastSession.topics) as string[];
-      if (topics.length > 0) {
-        parts.push(`Themen: ${topics.slice(0, 3).join(', ')}`);
+    // V6-5: Use WM summary if available (contains topic history + open questions)
+    if (lastSession.summary) {
+      parts.push(lastSession.summary);
+    } else {
+      // Fallback: Topics + last message
+      try {
+        const topics = JSON.parse(lastSession.topics) as string[];
+        if (topics.length > 0) {
+          parts.push(`Themen: ${topics.slice(0, 3).join(', ')}`);
+        }
+      } catch { /* no topics */ }
+
+      const lastMessages = db.prepare(
+        "SELECT content FROM raw_buffer WHERE session_id = ? ORDER BY timestamp DESC LIMIT 3"
+      ).all(lastSession.id) as Array<{ content: string }>;
+
+      if (lastMessages.length > 0) {
+        const lastMsg = lastMessages[0].content;
+        const truncated = lastMsg.length > 100 ? lastMsg.substring(0, 100) + '...' : lastMsg;
+        parts.push(`Letzter Austausch: "${truncated}"`);
       }
-    } catch { /* no topics */ }
-
-    // Last 3 messages from that session
-    const lastMessages = db.prepare(
-      "SELECT content FROM raw_buffer WHERE session_id = ? ORDER BY timestamp DESC LIMIT 3"
-    ).all(lastSession.id) as Array<{ content: string }>;
-
-    if (lastMessages.length > 0) {
-      const lastMsg = lastMessages[0].content;
-      const truncated = lastMsg.length > 100 ? lastMsg.substring(0, 100) + '...' : lastMsg;
-      parts.push(`Letzter Austausch: "${truncated}"`);
     }
 
     // Open tasks

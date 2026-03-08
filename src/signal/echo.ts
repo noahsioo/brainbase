@@ -1,6 +1,7 @@
 import { getDb, getNode, getSessionActivationRows, updateNode } from '../memory/store.js';
 import { recordProviderFeedback } from '../learning/ai-profiles.js';
 import { getSystemState, setSystemState } from '../memory/cold-start.js';
+import { getSessionMood, setSessionMood } from '../memory/session-runtime-state.js';
 import { markRecentOutcomesSuccess } from '../learning/outcome-tracker.js';
 import { trackFailure } from '../memory/prospective.js';
 
@@ -54,7 +55,11 @@ export function detectMood(prompt: string, isFrustrated: boolean): Mood {
   return 'neutral';
 }
 
-export function getCurrentMood(): Mood {
+export function getCurrentMood(sessionId?: string): Mood {
+  if (sessionId) {
+    return getSessionMood(sessionId);
+  }
+
   const stored = getSystemState('current_mood');
   if (stored === 'frustrated' || stored === 'excited' || stored === 'focused') {
     return stored;
@@ -62,7 +67,12 @@ export function getCurrentMood(): Mood {
   return 'neutral';
 }
 
-export function setCurrentMood(mood: Mood): void {
+export function setCurrentMood(mood: Mood, sessionId?: string): void {
+  if (sessionId) {
+    setSessionMood(sessionId, mood);
+    return;
+  }
+
   setSystemState('current_mood', mood);
 }
 

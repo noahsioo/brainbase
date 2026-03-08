@@ -30,7 +30,6 @@ import {
   setSessionAttentionState,
   setSessionContextSignal,
   setSessionEmpathyMode,
-  setSessionMood,
   setSessionTaskMode as setRuntimeTaskMode,
   setSessionTone,
 } from '../memory/session-runtime-state.js';
@@ -306,8 +305,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   }
   let mood = detectMood(input.message, signal.flags.frustration);
   if (shouldPersistState) {
-    setSessionMood(sessionId, mood);
-    setCurrentMood(mood);
+    setCurrentMood(mood, sessionId);
   }
 
   // 13.2: Empathy Mode — affective vs cognitive
@@ -321,8 +319,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     if (emotionBypass.moodOverride) {
       mood = emotionBypass.moodOverride;
       if (shouldPersistState) {
-        setSessionMood(sessionId, mood);
-        setCurrentMood(mood);
+        setCurrentMood(mood, sessionId);
       }
     }
     signal.nuclei.emotion.inhibited = Math.max(

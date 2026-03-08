@@ -2,6 +2,7 @@ import { getDb } from '../memory/store.js';
 import { getExpertiseMap } from './expertise-tracker.js';
 import { getMetaProfile } from '../tacit/meta-learner.js';
 import { getCurrentMood, type Mood } from '../signal/echo.js';
+import { getSessionMood } from '../memory/session-runtime-state.js';
 
 export interface UserModel {
   name: string;
@@ -14,7 +15,7 @@ export interface UserModel {
   total_messages: number;
 }
 
-export function buildUserModel(): UserModel {
+export function buildUserModel(sessionId?: string): UserModel {
   const db = getDb();
 
   const userEntity = db.prepare(`
@@ -48,7 +49,7 @@ export function buildUserModel(): UserModel {
     expertise,
     communication_type: meta.dominant_type,
     primary_learning_style: styles[0].key,
-    current_mood: getCurrentMood(),
+    current_mood: sessionId ? getSessionMood(sessionId) : getCurrentMood(),
     frustration_level: 1 - (lp.frustration_threshold || 0.5),
     total_sessions: sessionStats.count,
     total_messages: meta.total_messages_analyzed,
