@@ -127,30 +127,34 @@ How entities connect: uses, likes, dislikes, builds, knows, part_of, works_with,
 - GOOD: { "from": "Lovis", "to": "TypeScript", "type": "uses" }
 - BAD: { "from": "User", "to": "system", "type": "related_to" }
 
-## FACTS (only for complex info that doesn't fit as entity+relation)
-Still use facts for:
-- Complex insights that need a sentence
-- Decisions with reasoning
-- Examples of user's work (full text, up to 2000 chars)
-- Episodes or experiences
+## FACTS (RARELY needed — prefer entities+relations)
+Only use facts for these SPECIFIC cases:
+- A concrete PREFERENCE: "Bevorzugt X ueber Y" (type: preference)
+- A concrete DECISION with reasoning: "Switched from X to Y because Z" (type: decision)
+- User's IDENTITY info: name, age, role, location (type: identity)
+- Code EXAMPLES of user's work style (type: example, up to 2000 chars)
 
-Fact types: preference, fact, decision, task, project, learning, identity, insight, example
+Allowed fact types: preference, decision, identity, example
+Do NOT use any other fact type. If info fits as entity+relation, use that instead.
+
+## DEFAULT: nothing_new: true
+The DEFAULT response is nothing_new: true. You need a STRONG reason to set it to false.
 
 ## ABSOLUTE RULES
-1. If NOTHING new → nothing_new: true
-2. Smalltalk, confirmations, code requests, greetings, "let's continue" → NOTHING
-3. NEVER store vague garbage like "User is exploring...", "User wants to build a system that...", "User believes..."
-4. Only store CONCRETE, NAMED things: a person, a technology, a decision, a preference
-5. confidence between 0.3 and 0.8
-6. Prefer entities+relations over facts. Use facts only when a triple doesn't capture it
-7. "User" or the user's name is always a valid entity (type: person)
-8. Max 5 entities per message. If more → keep only the most important
-9. You can UPDATE existing knowledge via the "updates" array
-10. Stream-of-consciousness monologues without concrete info → NOTHING
-11. Meta-comments about the conversation itself → NOTHING
-12. If the messages are just continuing a known conversation without NEW concrete facts → nothing_new: true
-13. Repeating or rephrasing something already known → nothing_new: true
-14. In doubt: nothing_new: true. It's MUCH better to miss something than to store garbage.`;
+1. nothing_new: true is the DEFAULT. When in doubt → nothing_new: true
+2. Smalltalk, confirmations, code requests, build commands, greetings → nothing_new: true
+3. Continuing a conversation without NEW concrete info → nothing_new: true
+4. NEVER store vague observations: "User is exploring...", "User wants to build...", "User believes..."
+5. Only store CONCRETE, NAMED things: a person, a technology, a decision, a preference
+6. confidence between 0.3 and 0.5
+7. Prefer entities+relations over facts. Facts ONLY for preferences/decisions/identity
+8. "User" or the user's name is always a valid entity (type: person)
+9. Max 5 entities per message. If more → keep only the most important
+10. You can UPDATE existing knowledge via the "updates" array
+11. Meta-comments about the conversation → nothing_new: true
+12. Repeating or rephrasing something already known → nothing_new: true
+13. Code debugging, fixing, building, deploying → nothing_new: true (unless a NEW tool/technology is mentioned)
+14. It's MUCH better to miss something than to store garbage.`;
 
   if (frustration) {
     return base + `
@@ -207,13 +211,13 @@ Respond with this exact JSON:
 {
   "nothing_new": true or false,
   "entities": [
-    { "name": "EntityName", "type": "person|technology|project|concept|tool|food|place|organization|skill|language|framework|library", "confidence": 0.3-0.8 }
+    { "name": "EntityName", "type": "person|technology|project|concept|tool|food|place|organization|skill|language|framework|library", "confidence": 0.3-0.5 }
   ],
   "relations": [
-    { "from": "EntityA", "to": "EntityB", "type": "uses|likes|dislikes|builds|knows|part_of|works_with|prefers|wants|is_a|located_at|has_skill|related_to", "confidence": 0.3-0.8 }
+    { "from": "EntityA", "to": "EntityB", "type": "uses|likes|dislikes|builds|knows|part_of|works_with|prefers|wants|is_a|located_at|has_skill|related_to", "confidence": 0.3-0.5 }
   ],
   "new_facts": [
-    { "content": "...", "type": "preference|fact|decision|task|project|learning|identity|insight|example", "confidence": 0.3-0.8, "metadata": { "category": "optional" } }
+    { "content": "...", "type": "preference|decision|identity|example", "confidence": 0.3-0.5, "metadata": { "category": "optional" } }
   ],
   "topic": { "name": "short concrete topic", "confidence": 0.0-1.0 },
   "intent": "question|statement|request|feedback|greeting|other",
@@ -232,7 +236,8 @@ RULES FOR topic / intent / references:
 
 If nothing_new is true, entities/relations/new_facts/updates MUST be empty.
 topic and intent may still be set if clear. references may still be set if useful.
-Prefer entities+relations over facts. Facts are for complex info only.`;
+Prefer entities+relations over facts. Facts ONLY for preferences, decisions, identity, or examples.
+Remember: nothing_new: true is the DEFAULT. Most messages don't contain new knowledge.`;
 }
 
 function getRecentMessages(sessionId: string, limit: number = 10): string {
@@ -260,8 +265,24 @@ function isSubstantiveMessage(message: string): boolean {
 
   if (words.length < 3) return false;
 
-  const confirmPatterns = /^(ja|nein|ok|okay|genau|perfekt|passt|gut|weiter|mach|continue|yes|no|sure|right|exactly|nope|yep)$/i;
+  const confirmPatterns = /^(ja|nein|ok|okay|genau|perfekt|passt|gut|weiter|mach|continue|yes|no|sure|right|exactly|nope|yep|alles klar|klar|done|fertig|los|go)$/i;
   if (words.length <= 3 && words.every(w => confirmPatterns.test(w))) return false;
+
+  // V5-2: Code/build commands are not substantive for memory extraction
+  const commandPatterns = /^(mach|fix|aender|änder|build|run|deploy|push|commit|install|update|start|stop|delete|remove|erstell|zeig|show|list|check|test)\b/i;
+  if (words.length <= 5 && commandPatterns.test(lastMessage.trim())) return false;
+
+  // V5-2: Filter very short messages with only stopwords/filler
+  const SUBSTANTIVE_STOPWORDS = new Set([
+    'das', 'the', 'und', 'and', 'oder', 'aber', 'but', 'also', 'dann',
+    'bitte', 'please', 'mal', 'halt', 'noch', 'jetzt', 'now', 'hier',
+    'here', 'dort', 'there', 'einfach', 'just', 'only', 'nur', 'wie',
+    'how', 'was', 'what', 'mit', 'with', 'für', 'fuer', 'for', 'den',
+    'dem', 'die', 'der', 'ein', 'eine', 'einen', 'nicht', 'not', 'kann',
+    'can', 'will', 'soll', 'should', 'muss', 'must',
+  ]);
+  const realWords = words.filter(w => !SUBSTANTIVE_STOPWORDS.has(w.toLowerCase()));
+  if (realWords.length < 2) return false;
 
   return true;
 }
@@ -299,7 +320,7 @@ export async function extractFromMessageDetailed(
   if (isMultiMessage) {
     recentContext = message;
   } else {
-    const buffered = getRecentMessages(sessionId, 8);
+    const buffered = getRecentMessages(sessionId, 3);
     if (buffered) {
       recentContext = buffered;
     }
@@ -513,11 +534,12 @@ export async function extractFromMessageDetailed(
       if (!fact.content || fact.content.length < 5 || fact.content.length > maxLen) continue;
       if (isGarbage(fact.content)) { recordGarbage(); recordGarbageType(fact.content); continue; }
 
-      const validTypes = ['preference', 'fact', 'decision', 'task', 'project', 'learning', 'identity', 'insight', 'example'];
+      const validTypes = ['preference', 'decision', 'identity', 'example'];
       if (!validTypes.includes(fact.type)) continue;
 
-      // 10.2+10.3: Sarcasm → drastically reduce confidence (don't store jokes as facts)
-      let confidence = Math.min(CONFIDENCE_CAP, Math.max(0, fact.confidence));
+      // V5-2: New facts start with max 0.5 confidence — must earn higher via Evidence
+      const NEW_FACT_CONFIDENCE_CAP = 0.5;
+      let confidence = Math.min(NEW_FACT_CONFIDENCE_CAP, Math.max(0, fact.confidence));
       if (encodingSig?.sarcasm_detected) {
         confidence *= 0.3;
       }

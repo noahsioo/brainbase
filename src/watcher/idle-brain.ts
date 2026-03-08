@@ -1,4 +1,5 @@
-import { getDb, getNode, updateNode } from '../memory/store.js';
+import { getDb, getNode } from '../memory/store.js';
+import { getSessionActivationValue, setSessionActivationValue } from '../memory/activation.js';
 import { measureSystemHealth } from '../senses/interoception.js';
 import { detectHungerZones } from '../memory/knowledge-hunger.js';
 import { updateSelfModel } from '../meta/self-model.js';
@@ -49,7 +50,7 @@ export function runIdleTick(): IdleResult {
   // 4. Leichter Activation Decay — Nodes die nicht mehr relevant sind, klingen ab
   try {
     const decayed = db.prepare(
-      "UPDATE nodes SET activation = activation * 0.95 WHERE activation > 0.01 AND activation < 0.3"
+      "UPDATE session_activations SET activation = activation * 0.95 WHERE activation > 0.01 AND activation < 0.3"
     ).run();
     result.decay_applied = decayed.changes;
   } catch { /* non-fatal */ }
@@ -62,45 +63,71 @@ export function runIdleTick(): IdleResult {
   return result;
 }
 
+function parseFocusEntities(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter((value): value is string => typeof value === 'string' && value.length > 0).slice(0, 3);
+    }
+    if (parsed && typeof parsed === 'object') {
+      return Object.entries(parsed as Record<string, number>)
+        .filter(([key, value]) => key.length > 0 && typeof value === 'number')
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([key]) => key);
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
+function getActiveSessionIds(limit = 3): string[] {
+  const db = getDb();
+  return db.prepare(
+    'SELECT id FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT ?',
+  ).all(limit).map((row) => (row as { id: string }).id);
+}
+
 // 17.2: Proaktive Context-Vorbereitung — Session-Focus Entities vorwaermen
 export function preWarmContext(): number {
   const db = getDb();
   let warmed = 0;
 
   try {
-    const focusRow = db.prepare(
-      "SELECT value FROM system_state WHERE key LIKE 'session_focus_%' ORDER BY updated_at DESC LIMIT 1"
-    ).get() as { value: string } | undefined;
-    if (!focusRow) return 0;
+    const sessionIds = getActiveSessionIds();
+    for (const sessionId of sessionIds) {
+      const focusRow = db.prepare(
+        'SELECT value FROM system_state WHERE key = ?',
+      ).get(`session_focus_${sessionId}`) as { value: string } | undefined;
+      if (!focusRow) continue;
 
-    const focusEntities: string[] = JSON.parse(focusRow.value);
+      const focusEntities = parseFocusEntities(focusRow.value);
+      for (const entityName of focusEntities) {
+        const entities = db.prepare(
+          "SELECT id FROM nodes WHERE type = 'entity' AND LOWER(content) = LOWER(?) LIMIT 1"
+        ).all(entityName) as Array<{ id: string }>;
 
-    for (const entityName of focusEntities.slice(0, 3)) {
-      const entities = db.prepare(
-        "SELECT id FROM nodes WHERE type = 'entity' AND LOWER(content) = LOWER(?) LIMIT 1"
-      ).all(entityName) as Array<{ id: string }>;
-
-      for (const entity of entities) {
-        const node = getNode(entity.id);
-        if (!node) continue;
-        const newActivation = Math.min(0.15, (node.activation || 0) + 0.05);
-        if (newActivation > (node.activation || 0)) {
-          updateNode(entity.id, { activation: newActivation });
-          warmed++;
-        }
-
-        const edges = db.prepare(
-          "SELECT target_id, source_id FROM edges WHERE (source_id = ? OR target_id = ?) AND strength > 0.3 LIMIT 5"
-        ).all(entity.id, entity.id) as Array<{ target_id: string; source_id: string }>;
-
-        for (const edge of edges) {
-          const neighborId = edge.source_id === entity.id ? edge.target_id : edge.source_id;
-          const neighbor = getNode(neighborId);
-          if (!neighbor) continue;
-          const warmActivation = Math.min(0.08, (neighbor.activation || 0) + 0.03);
-          if (warmActivation > (neighbor.activation || 0)) {
-            updateNode(neighborId, { activation: warmActivation });
+        for (const entity of entities) {
+          const currentActivation = getSessionActivationValue(entity.id, sessionId);
+          const newActivation = Math.min(0.15, currentActivation + 0.05);
+          if (newActivation > currentActivation) {
+            setSessionActivationValue(entity.id, sessionId, newActivation);
             warmed++;
+          }
+
+          const edges = db.prepare(
+            "SELECT target_id, source_id FROM edges WHERE (source_id = ? OR target_id = ?) AND strength > 0.3 LIMIT 5"
+          ).all(entity.id, entity.id) as Array<{ target_id: string; source_id: string }>;
+
+          for (const edge of edges) {
+            const neighborId = edge.source_id === entity.id ? edge.target_id : edge.source_id;
+            const neighbor = getNode(neighborId);
+            if (!neighbor) continue;
+            const neighborActivation = getSessionActivationValue(neighborId, sessionId);
+            const warmActivation = Math.min(0.08, neighborActivation + 0.03);
+            if (warmActivation > neighborActivation) {
+              setSessionActivationValue(neighborId, sessionId, warmActivation);
+              warmed++;
+            }
           }
         }
       }

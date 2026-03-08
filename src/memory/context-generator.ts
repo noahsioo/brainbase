@@ -1009,10 +1009,10 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
 
   if (sessionTopic) {
     const relevant = nodes.filter(n => isTopicRelevant(n, sessionTopic));
+    const irrelevant = nodes.filter(n => !isTopicRelevant(n, sessionTopic));
     nodes = sortByContextScore(relevant);
     // Fallback: wenn topic-relevant zu wenig (<3), Top irrelevant dazunehmen
     if (nodes.length < 3) {
-      const irrelevant = nodes.filter(n => !isTopicRelevant(n, sessionTopic));
       nodes = [...nodes, ...sortByContextScore(irrelevant).slice(0, 3 - nodes.length)];
     }
   } else {

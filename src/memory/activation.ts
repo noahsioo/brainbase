@@ -86,7 +86,7 @@ export function startNewCoherenceRound(sessionId: string): void {
   getScope(sessionId).coherenceGroup.clear();
 }
 
-const SPREAD_FACTOR = 0.5;
+const SPREAD_FACTOR = 0.3;
 const DECAY_RATE = 0.85;
 const MIN_ACTIVATION = 0.01;
 const MAX_DEPTH = 2;

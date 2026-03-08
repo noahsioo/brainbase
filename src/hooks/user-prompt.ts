@@ -16,12 +16,11 @@ import { detectFeedbackSignal, detectMood, setCurrentMood, applyFeedbackToRecent
 import { updateHotMemoryInDb } from '../memory/hot.js';
 import { checkProspectiveTriggers } from '../memory/prospective.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
-import { detectHungerZones, markImpulseIgnored, getHungerZones, generateCuriosityImpulses, type HungerZone } from '../memory/knowledge-hunger.js';
 import { detectEmotionBypass } from '../senses/emotion-sense.js';
 import { getStability } from '../senses/stability-sense.js';
 import { analyzeTone } from '../senses/tone-sense.js';
 import { analyzeContext } from '../senses/context-sense.js';
-import { detectFeelingOfKnowing, calculateAttentionState } from '../meta/metacognition.js';
+import { calculateAttentionState } from '../meta/metacognition.js';
 import { getSystemMood } from '../senses/interoception.js';
 import { shouldAllowLLMCall } from '../regulation/energy.js';
 import { calculateStressLevel } from '../regulation/stress-response.js';
@@ -242,16 +241,6 @@ function normalizeLiveValue(value: string | undefined): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
-function writeSemanticExtractionState(sessionId: string, semantic: SemanticExtraction): void {
-  const db = getDb();
-  const now = Date.now();
-  const status = semantic.degraded ? 'degraded' : 'ready';
-
-  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run(`semantic_extraction_status_${sessionId}`, status, now);
-  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run(`semantic_extraction_source_${sessionId}`, semantic.source, now);
-}
 
 export async function processMessage(input: ProcessMessageInput): Promise<ProcessMessageResult> {
   const sessionId = input.session_id || `session-${Date.now()}`;
@@ -346,15 +335,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     }
   }
 
-  // 10.3: Sarcasm flag for extractor (reduces extraction confidence)
-  if (shouldPersistState) {
-    const dbSarcasm = getDb();
-    dbSarcasm.prepare("DELETE FROM system_state WHERE key = 'current_sarcasm'").run();
-    if (emotionBypass.type === 'sarcasm') {
-      dbSarcasm.prepare("INSERT INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-        .run('current_sarcasm', '1', Date.now());
-    }
-  }
+  // 10.3: Sarcasm flag — DB-Writes disabled (V5-5.2)
 
   // 13.3: Task-Set Inference — store current task mode
   if (shouldPersistState) {
@@ -489,7 +470,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   });
 
   if (shouldPersistState) {
-    writeSemanticExtractionState(sessionId, effectiveSemantic);
+    // writeSemanticExtractionState disabled (V5-5.2)
 
     updateWorkingMemory({
       sessionId,
@@ -593,24 +574,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     }
   }
 
-  // 15.1: Feeling of Knowing
-  if (shouldPersistState) {
-    const fokSignal = detectFeelingOfKnowing(effectiveTopic);
-    if (fokSignal) {
-      if (sessionId) {
-        getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-          .run(`fok_signal_${sessionId}`, JSON.stringify(fokSignal), Date.now());
-      }
-      getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-        .run('fok_signal', JSON.stringify(fokSignal), Date.now());
-    } else {
-      if (sessionId) {
-        getDb().prepare("DELETE FROM system_state WHERE key = ?").run(`fok_signal_${sessionId}`);
-      } else {
-        getDb().prepare("DELETE FROM system_state WHERE key = 'fok_signal'").run();
-      }
-    }
-  }
+  // 15.1: Feeling of Knowing — DB-Writes disabled (V5-5.2)
 
   const db2 = getDb();
   const sessionRow = db2.prepare(
@@ -623,10 +587,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       updateHotMemoryInDb();
     }
 
-    // 9.1: Detect hunger zones (every 3rd message to save perf)
-    if (messageCount % 3 === 0 || messageCount <= 1) {
-      detectHungerZones();
-    }
+    // 9.1: Hunger zones disabled (V5-5.1)
   }
 
   // M29: Dual Process — signal strength determines context depth, not message count
@@ -680,38 +641,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
 
   let finalContext = context;
 
-  // 9.2: Inject curiosity impulses
-  const hungerZones = getHungerZones();
-  if (hungerZones.length > 0 && contextMode !== 'LIGHT') {
-    const impulses = generateCuriosityImpulses(hungerZones);
-    if (impulses.length > 0) {
-      const impulseBlock = '\n' + impulses.join(' ');
-      finalContext = finalContext ? finalContext + impulseBlock : impulseBlock;
-
-      // Track: if user doesn't mention hungry entities next message, increment ignore
-      if (shouldPersistState) {
-        getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-          .run(`pending_impulses_${sessionId}`, JSON.stringify(hungerZones), Date.now());
-      }
-    }
-  }
-
-  // Check if previous impulses were ignored
-  if (shouldPersistState) {
-    const pendingRow = getDb().prepare("SELECT value FROM system_state WHERE key = ?")
-      .get(`pending_impulses_${sessionId}`) as { value: string } | undefined;
-    if (pendingRow) {
-      const pending: HungerZone[] = JSON.parse(pendingRow.value);
-      const ignoredZones = pending.filter(z =>
-        !input.message.toLowerCase().includes(z.entity.toLowerCase())
-      );
-      if (ignoredZones.length > 0) {
-        markImpulseIgnored(ignoredZones);
-      }
-      getDb().prepare("DELETE FROM system_state WHERE key = ?")
-        .run(`pending_impulses_${sessionId}`);
-    }
-  }
+  // 9.2: Curiosity impulses disabled (V5-5.1)
 
   // Inject prospective memory reminders
   if (prospectiveMatches.length > 0) {

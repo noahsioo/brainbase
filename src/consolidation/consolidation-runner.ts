@@ -125,12 +125,12 @@ function transferToTier2(): number {
 // 11.1: Evidence Decay — single-mention old facts fade, high-evidence facts become permanent
 function applyEvidenceDecay(): void {
   const db = getDb();
-  const fourteenDaysAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
 
   const oldNodes = db.prepare(`
     SELECT id, importance, metadata FROM nodes
     WHERE created_at < ? AND type NOT IN ('core', 'system_knowledge', 'entity', 'auto_topic')
-  `).all(fourteenDaysAgo) as Array<{ id: string; importance: number; metadata: string | null }>;
+  `).all(sevenDaysAgo) as Array<{ id: string; importance: number; metadata: string | null }>;
 
   for (const node of oldNodes) {
     let meta: Record<string, unknown> = {};

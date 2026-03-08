@@ -251,11 +251,16 @@ export function calculateQualityScore(content: string, type: string): number {
   if (content.length < 10) score -= 0.2;
   if (content.length > 200 && type !== 'example') score -= 0.1;
 
-  // Meta-observations are always bad
+  // V5-2: Meta-observations — harder penalty (-0.5 statt -0.3)
   if (/\b(is exploring|is considering|was discussing|is working on|seems to|appears to|is curious|is interested|is thinking|was working|has been)\b/i.test(content)) {
-    score -= 0.3;
+    score -= 0.5;
   }
   if (/\b(erkundet|ueberlegt|überlegt|diskutiert|scheint|arbeitet an|ist neugierig|ist interessiert)\b/i.test(content)) {
+    score -= 0.5;
+  }
+
+  // V5-2: Very short content without Named Entity → likely garbage
+  if (content.length < 20 && !hasProperNoun && !hasNamedThing) {
     score -= 0.3;
   }
 
@@ -313,10 +318,21 @@ const GARBAGE_PATTERNS = [
   /^lovis (?:is|was|has) (?:been )?(?:working|building|exploring|discussing|considering)/i,
   /\buser (?:asked|mentioned|noted|said|stated|indicated|expressed|shared|revealed|admitted)\b/i,
   /\b(?:seems|appears) to (?:be|have|want|like|prefer|think|believe)\b/i,
+  // V5-2: Anti-summary — "[Name] is/was/has [generic verb]" at start
+  /^[A-Z][a-z]+ (?:is|was|has|seems?|appears?|wants?|prefers?|likes?|dislikes?|believes?|thinks?|feels?) /i,
+  // V5-2: Generic action summaries
+  /\b(?:is|was) (?:working on|building|developing|creating|implementing|designing|planning|testing|debugging|fixing|improving|optimizing)\b/i,
+  /\b(?:wants to|will|plans to|intends to|tries to|needs to) (?:build|create|implement|improve|fix|learn|understand|explore)\b/i,
 ];
 
 export function isGarbage(content: string): boolean {
-  return GARBAGE_PATTERNS.some(p => p.test(content));
+  if (GARBAGE_PATTERNS.some(p => p.test(content))) return true;
+
+  // V5-2: Content without any Named Entity (capitalized word > 3 chars) is likely garbage
+  const hasNamedEntity = /[A-Z][a-zA-Z]{3,}/.test(content);
+  if (!hasNamedEntity && content.length > 30) return true;
+
+  return false;
 }
 
 // ── Entity & Relation Verification ──────────────────────────
