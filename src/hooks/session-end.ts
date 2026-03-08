@@ -10,6 +10,7 @@ import { clearScope } from '../memory/session-scope.js';
 import { deleteWorkingMemory, finalizeWorkingMemory } from '../memory/working-memory.js';
 import { clearSessionRuntimeState } from '../memory/session-runtime-state.js';
 import { setSessionTopicEmbedding, setSessionMessageEmbedding } from '../memory/context-generator.js';
+import { clearThalamicSessionState } from '../signal/thalamus.js';
 
 
 interface SessionEndInput {
@@ -71,6 +72,7 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
       setSessionTopicEmbedding(null);
       setSessionMessageEmbedding(null);
       clearScope(sessionId);
+      clearThalamicSessionState(sessionId);
       cleanupSessionState(sessionId);
     }
   } catch {
@@ -143,7 +145,6 @@ function cleanupSessionState(sessionId: string): void {
       `last_context_node_ids_${sessionId}`,
       `context_prediction_${sessionId}`,
       `context_feedback_scores_${sessionId}`,
-      `fok_signal_${sessionId}`,
       `stress_level_${sessionId}`,
     ];
     for (const key of keys) {

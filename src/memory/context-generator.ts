@@ -1638,38 +1638,6 @@ function buildCounterEvidenceSlot(budget: number, sessionId?: string): string {
 
 // ── Meta Insight (unchanged) ────────────────────────────────
 
-function getSessionFokSignal(sessionId?: string): { topic?: string; has_fragments?: boolean; weakly_activated?: number } | null {
-  try {
-    const db = getDb();
-    if (sessionId) {
-      const sessionRow = db.prepare('SELECT value FROM system_state WHERE key = ?')
-        .get(`fok_signal_${sessionId}`) as { value: string } | undefined;
-      if (!sessionRow) return null;
-      return JSON.parse(sessionRow.value) as { topic?: string; has_fragments?: boolean; weakly_activated?: number };
-    }
-
-    const row = db.prepare("SELECT value FROM system_state WHERE key = 'fok_signal'")
-      .get() as { value: string } | undefined;
-    if (!row) return null;
-    return JSON.parse(row.value) as { topic?: string; has_fragments?: boolean; weakly_activated?: number };
-  } catch {
-    return null;
-  }
-}
-
-function isFokRelevantToTopic(
-  fok: { topic?: string; has_fragments?: boolean; weakly_activated?: number } | null,
-  currentTopic?: string,
-): boolean {
-  if (!fok?.has_fragments) return false;
-  if (!currentTopic) return true;
-
-  const fokTopic = normalizeProfileHint(fok.topic || '');
-  const normalizedTopic = normalizeProfileHint(currentTopic);
-  if (!fokTopic || !normalizedTopic) return true;
-  return fokTopic.includes(normalizedTopic) || normalizedTopic.includes(fokTopic);
-}
-
 function buildMetaInsightSlot(
   budget: number,
   topicExpertise?: number,
@@ -1742,12 +1710,6 @@ function buildMetaInsightSlot(
     } else if (topicExpertise < 0.3) {
       lines.push('User ist Beginner hier. Mehr Kontext und Erklaerungen geben.');
     }
-  }
-
-  // 15.1: FOK warning
-  const fok = getSessionFokSignal(sessionId);
-  if (isFokRelevantToTopic(fok, currentTopic)) {
-    lines.push(`Zu "${fok?.topic}" hat das System fragmentarische Erinnerungen (${fok?.weakly_activated || 0} Bruchstuecke). Details wuerden helfen.`);
   }
 
   // 15.4: Self-Model summary

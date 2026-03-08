@@ -51,31 +51,6 @@ export function detectHungerZones(): HungerZone[] {
     }
   }
 
-  // 15.1: FOK → Hunger
-  try {
-    const fokRow = db.prepare("SELECT value FROM system_state WHERE key = 'fok_signal'")
-      .get() as { value: string } | undefined;
-    if (fokRow) {
-      const fok = JSON.parse(fokRow.value);
-      if (fok.has_fragments && fok.fok_score > 0.6) {
-        const topicWords = (fok.topic as string).split(/\s+/).filter((w: string) => w.length > 3);
-        for (const word of topicWords.slice(0, 2)) {
-          if (zones.find(z => z.entity.toLowerCase() === word.toLowerCase())) continue;
-          const entityRow = db.prepare(
-            "SELECT id, content FROM nodes WHERE type = 'entity' AND LOWER(content) = LOWER(?) LIMIT 1"
-          ).get(word) as { id: string; content: string } | undefined;
-          if (entityRow) {
-            zones.push({
-              entity: entityRow.content, entity_id: entityRow.id,
-              hunger_score: fok.fok_score * 1.5,
-              mentions: fok.weakly_activated, edges: 0, ignore_count: 0,
-            });
-          }
-        }
-      }
-    }
-  } catch { /* non-fatal */ }
-
   // Sort by hunger_score descending, return top 3
   zones.sort((a, b) => b.hunger_score - a.hunger_score);
   const topZones = zones.slice(0, 3);

@@ -81,13 +81,6 @@ export function buildSelfModel(): SelfModel {
     domainCount = (db.prepare("SELECT COUNT(DISTINCT domain) as c FROM expertise").get() as { c: number }).c;
   } catch { /* expertise table may not exist */ }
 
-  let fokFrequency = 0;
-  try {
-    const fokRow = db.prepare("SELECT value FROM system_state WHERE key = 'fok_signal'")
-      .get() as { value: string } | undefined;
-    fokFrequency = fokRow ? 0.5 : 0;
-  } catch { /* non-fatal */ }
-
   let hungerCount = 0;
   try {
     const hr = db.prepare("SELECT value FROM system_state WHERE key = 'hunger_zones'")
@@ -107,7 +100,7 @@ export function buildSelfModel(): SelfModel {
     accuracy: Math.round(accuracy * 100) / 100,
     strongest_domains: strongestDomains,
     weakest_areas: weakestAreas,
-    fok_frequency: fokFrequency,
+    fok_frequency: 0,
     hunger_zone_count: hungerCount,
     updated_at: Date.now(),
   };
