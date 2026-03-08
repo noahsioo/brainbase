@@ -400,6 +400,82 @@ function applySessionPhaseBudgetProfile(
   }
 }
 
+// ── V5-3: Dynamic Slot Decision ─────────────────────────────
+
+interface SlotDecision {
+  showScene: boolean;
+  showWorkingMemory: boolean;
+  showEntityProfile: boolean;
+  showActiveContext: boolean;
+  showEntityGraph: boolean;
+  showMomentum: boolean;
+  showExtras: boolean;
+  showSerendipity: boolean;
+}
+
+function decideContextSlots(
+  phase: 'bootstrap' | 'active' | 'deep',
+  messageCount: number,
+  hasTopicChange: boolean,
+  mood?: string,
+  taskMode?: string,
+  wmHasOpenQuestions?: boolean,
+): SlotDecision {
+  // Nachricht 1: Orientierung — Profil + Kontext + letzte Session
+  if (messageCount <= 1) {
+    return {
+      showScene: true, showWorkingMemory: false, showEntityProfile: true,
+      showActiveContext: true, showEntityGraph: false, showMomentum: true,
+      showExtras: false, showSerendipity: false,
+    };
+  }
+
+  // Nachricht 2-3: Bootstrap — WM aufbauen
+  if (phase === 'bootstrap') {
+    return {
+      showScene: true, showWorkingMemory: true, showEntityProfile: false,
+      showActiveContext: true, showEntityGraph: hasTopicChange, showMomentum: false,
+      showExtras: false, showSerendipity: false,
+    };
+  }
+
+  // Topic-Wechsel: Graph zum neuen Topic zeigen
+  if (hasTopicChange) {
+    return {
+      showScene: true, showWorkingMemory: true, showEntityProfile: false,
+      showActiveContext: true, showEntityGraph: true, showMomentum: false,
+      showExtras: false, showSerendipity: false,
+    };
+  }
+
+  // Frustrated/Debugging: Failures + Kontext
+  if (mood === 'frustrated' || taskMode === 'debugging') {
+    return {
+      showScene: true, showWorkingMemory: true, showEntityProfile: false,
+      showActiveContext: true, showEntityGraph: false, showMomentum: false,
+      showExtras: true, showSerendipity: false,
+    };
+  }
+
+  // Deep Session: fokussiert, Extras nur periodisch
+  if (phase === 'deep') {
+    return {
+      showScene: false, showWorkingMemory: true, showEntityProfile: false,
+      showActiveContext: true, showEntityGraph: wmHasOpenQuestions || false,
+      showMomentum: false, showExtras: messageCount % 5 === 0,
+      showSerendipity: messageCount % 8 === 0,
+    };
+  }
+
+  // Active (normal): WM + Kontext, Scene/Extras periodisch
+  return {
+    showScene: messageCount % 3 === 0, showWorkingMemory: true,
+    showEntityProfile: false, showActiveContext: true, showEntityGraph: false,
+    showMomentum: false, showExtras: messageCount % 5 === 0,
+    showSerendipity: false,
+  };
+}
+
 // ── Relation Labels ─────────────────────────────────────────
 
 const RELATION_LABELS: Record<string, string> = {
@@ -2107,15 +2183,37 @@ export function generateContext(
     budget.activeContext = Math.max(0, budget.activeContext - workingMemoryBudget);
   }
 
+  // V5-3: Dynamic Slot Decision — WM-driven context assembly
+  const wmMessageCount = sessionWorkingMemory?.message_count ?? 0;
+  const wmTopicHistory = sessionWorkingMemory?.topic_history ?? [];
+  const hasTopicChange = wmTopicHistory.length > 0
+    ? wmTopicHistory[wmTopicHistory.length - 1] !== (sessionWorkingMemory?.current_topic || '')
+    : false;
+
+  const slots = decideContextSlots(
+    sessionPhaseProfile.phase,
+    wmMessageCount,
+    hasTopicChange,
+    effectiveCurrentMood,
+    effectiveTaskMode,
+    (sessionWorkingMemory?.open_questions.length ?? 0) > 0,
+  );
+
   const sections: string[] = [];
 
-  // 22.2: Scene Construction — kompakter Situations-Header
-  const scene = buildSceneSlot(100, currentTopic, effectiveCurrentMood, effectiveTaskMode, sessionId, effectiveContextSignal);
-  if (scene) sections.push(scene);
+  // Scene — kompakter Situations-Header
+  if (slots.showScene) {
+    const scene = buildSceneSlot(100, currentTopic, effectiveCurrentMood, effectiveTaskMode, sessionId, effectiveContextSignal);
+    if (scene) sections.push(scene);
+  }
 
-  const workingMemory = buildWorkingMemorySlot(workingMemoryBudget, sessionId);
-  if (workingMemory) sections.push(workingMemory);
+  // Working Memory
+  if (slots.showWorkingMemory) {
+    const workingMemory = buildWorkingMemorySlot(workingMemoryBudget, sessionId);
+    if (workingMemory) sections.push(workingMemory);
+  }
 
+  // Task Reminder — eigene Logik, unabhaengig von Slot-Decision
   const localTaskReminderBudget = Math.max(120, budget.sessionMomentum);
   const shouldShowTasksEarly = shouldShowLocalTaskReminder(sessionId, effectiveTaskMode);
   if (shouldShowTasksEarly) {
@@ -2123,15 +2221,14 @@ export function generateContext(
     if (taskReminder) sections.push(taskReminder);
   }
 
-  // M24: Frustrated → failure warnings FIRST and ALWAYS
-  // 13.3: Debugging → also show failures first (task-driven, not mood-driven)
+  // Failure Warning — nur bei frustrated/debugging
   if ((effectiveCurrentMood === 'frustrated' || effectiveTaskMode === 'debugging') && currentTopic) {
     const failureWarning = buildFailureWarningSlot(budget.extras, currentTopic, sessionId);
     if (failureWarning) sections.push(failureWarning);
   }
 
-  // Entity Profile nur in bootstrap Phase (erste 2 Nachrichten)
-  if (sessionPhaseProfile.phase === 'bootstrap') {
+  // Entity Profile — nur bei Session-Start oder Bootstrap
+  if (slots.showEntityProfile) {
     if (sessionPhaseProfile.showDistilledProfile) {
       const distilledProfile = buildDistilledProfileSlot(budget.entityProfile);
       if (distilledProfile) sections.push(distilledProfile);
@@ -2141,28 +2238,36 @@ export function generateContext(
     if (entityProfile) sections.push(entityProfile);
   }
 
-  const activeContext = buildActiveContextSlot(budget.activeContext, currentTopic, effectiveCurrentMood, salienceMode, sessionId);
-  if (activeContext) sections.push(activeContext);
+  // Active Context — semantisch gerankt (Hybrid Retrieval)
+  if (slots.showActiveContext) {
+    const activeContext = buildActiveContextSlot(budget.activeContext, currentTopic, effectiveCurrentMood, salienceMode, sessionId);
+    if (activeContext) sections.push(activeContext);
+  }
 
-  if (sessionPhaseProfile.showSessionMomentum) {
+  // Session Momentum — nur bei Session-Start
+  if (slots.showMomentum) {
     const momentum = buildSessionMomentumSlot(budget.sessionMomentum);
     if (momentum) sections.push(momentum);
   }
 
-  const entityGraph = buildEntityGraphSlot(budget.entityGraph, currentTopic, sessionId);
-  if (entityGraph) sections.push(entityGraph);
+  // Entity Graph — nur bei Topic-Wechsel oder offenen Fragen
+  if (slots.showEntityGraph) {
+    const entityGraph = buildEntityGraphSlot(budget.entityGraph, currentTopic, sessionId);
+    if (entityGraph) sections.push(entityGraph);
+  }
 
-  const serendipity = buildSerendipitySlot(budget.serendipity, effectiveCurrentMood, salienceMode);
-  if (serendipity) sections.push(serendipity);
+  // Serendipity — selten, nur in deep sessions
+  if (slots.showSerendipity) {
+    const serendipity = buildSerendipitySlot(budget.serendipity, effectiveCurrentMood, salienceMode);
+    if (serendipity) sections.push(serendipity);
+  }
 
-  // 19.2: Nebengedanken — schwach aktivierte aber wichtige Nodes
-  if (effectiveMode === 'MAXIMUM' || effectiveMode === 'STANDARD') {
+  // Extras — nur periodisch oder bei Bedarf
+  if (slots.showExtras && (effectiveMode === 'MAXIMUM' || effectiveMode === 'STANDARD')) {
     const activatedNodes = getActivatedNodes(30, sessionId);
     const backgroundThoughts = buildBackgroundThoughtsSlot(budget.serendipity, activatedNodes);
     if (backgroundThoughts) sections.push(backgroundThoughts);
-  }
 
-  if (effectiveMode === 'MAXIMUM' || effectiveMode === 'STANDARD') {
     const ghostCtx = buildGhostContextSlot(budget.extras, currentTopic, topicExpertise, sessionPhaseProfile.phase);
     if (ghostCtx) sections.unshift(ghostCtx);
 
@@ -2171,17 +2276,14 @@ export function generateContext(
       if (taskReminder) sections.push(taskReminder);
     }
 
-    // Failure warning already added at top for frustrated/debugging — skip duplicate
     if (currentTopic && effectiveCurrentMood !== 'frustrated' && effectiveTaskMode !== 'debugging') {
       const failureWarning = buildFailureWarningSlot(budget.extras, currentTopic, sessionId);
       if (failureWarning) sections.push(failureWarning);
     }
 
-    // M31: Conflict Monitoring — show active contradictions
     const conflicts = buildConflictSlot(budget.extras, sessionId);
     if (conflicts) sections.push(conflicts);
 
-    // 25.2: Counter-Evidence — aktive Gegensuche gegen Confirmation Bias
     const counterEvidence = buildCounterEvidenceSlot(budget.extras, sessionId);
     if (counterEvidence) sections.push(counterEvidence);
 
@@ -2206,11 +2308,9 @@ export function generateContext(
     const examples = buildExamplesSlot(exampleBudget, currentTopic, sessionId);
     if (examples) sections.push(examples);
 
-    // M50: Tip-of-the-Tongue — weakly activated but relevant nodes
     const tot = buildTipOfTongueSlot(budget.extras, currentTopic);
     if (tot) sections.push(tot);
 
-    // 22.4: Prospection — Zukunft konstruieren (Schema + zeitliche Nachfolger)
     const prospection = buildProspectionSlot(budget.extras, currentTopic, sessionId, readOnly);
     if (prospection) sections.push(prospection);
   }
