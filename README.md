@@ -102,6 +102,8 @@ npm install -g brainbase
 **Life:** Background Processing, Proactive Context Warming, DMN Creative Connections, System Mood
 
 **Lifecycle:** Development Phases, Age-Specific Behavior across all subsystems
+
+Full descriptions: [All 92 Mechanisms →](https://docs.brainbase.dev/mechanisms/)
 </details>
 
 ## Supported providers
@@ -119,6 +121,8 @@ Works with any AI that supports hooks or MCP:
 | **Aider** | MCP Server | Full |
 | **Continue** | MCP Server | Full |
 | **Any MCP client** | MCP Server (stdio) | Full |
+
+Setup guide for each provider: [Provider docs →](https://docs.brainbase.dev/providers/)
 
 ## Install
 
@@ -139,6 +143,8 @@ brainbase watcher start
 ```
 
 After `brainbase init`, just use your AI normally. BrainBase works in the background — extracting knowledge, building connections, strengthening memories. Your AI gets smarter with every conversation.
+
+Full setup guide: [Getting Started →](https://docs.brainbase.dev/getting-started/installation.html)
 
 ## How it works
 
@@ -176,6 +182,8 @@ Thalamus  Senses   Emotion   Memory
 
 Your AI never sees the graph directly. It gets a narrative briefing with exactly the right context for the current conversation.
 
+Deep dive into every mechanism: [How BrainBase Works →](https://docs.brainbase.dev/concepts/overview.html)
+
 ## The brain is alive
 
 This isn't a database that waits for queries. BrainBase runs continuously:
@@ -204,6 +212,8 @@ This isn't a database that waits for queries. BrainBase runs continuously:
 | `brainbase snapshot` | Export brain state |
 | `brainbase embed` | Generate embeddings for hybrid search |
 
+Full reference with flags and examples: [CLI docs →](https://docs.brainbase.dev/cli/)
+
 ## Dashboard
 
 Oh yeah, I also built a dashboard. Because why not. 🧠
@@ -220,6 +230,8 @@ Oh yeah, I also built a dashboard. Because why not. 🧠
 ```bash
 brainbase dashboard
 ```
+
+[Dashboard docs →](https://docs.brainbase.dev/dashboard/)
 
 ## Architecture
 
@@ -247,11 +259,15 @@ src/
 
 100 TypeScript files. 18,000+ lines. Zero dependencies on any AI provider.
 
+[Full architecture breakdown →](https://docs.brainbase.dev/architecture/)
+
 ## Privacy
 
 Your brain runs **100% locally**. SQLite database on your machine. No cloud. No telemetry. No data leaves your device.
 
 Your data is yours. Always.
+
+[Privacy & License details →](https://docs.brainbase.dev/privacy/)
 
 ## Tech Stack
 
