@@ -22,6 +22,7 @@
   <a href="#supported-providers">Providers</a> ·
   <a href="#commands">Commands</a> ·
   <a href="#dashboard">Dashboard</a> ·
+  <a href="https://docs.brainbase.dev">Docs</a> ·
   <a href="https://brainbase.dev">Website</a>
 </p>
 
