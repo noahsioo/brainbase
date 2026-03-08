@@ -1,7 +1,7 @@
 import { createSession, getDb } from '../memory/store.js';
 import { generateContext } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
-import { decayAllActivations } from '../memory/activation.js';
+import { clearSessionActivationOverlay } from '../memory/activation.js';
 import { incrementSessionCount, isCriticalPeriod, getDevelopmentPhase } from '../memory/cold-start.js';
 import { getConfig } from '../config.js';
 import { buildPrediction, savePrediction } from '../signal/prediction.js';
@@ -9,6 +9,7 @@ import { startNewSessionTrend } from '../regulation/allostasis.js';
 import { getScope } from '../memory/session-scope.js';
 import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
+import { initWorkingMemory } from '../memory/working-memory.js';
 
 interface SessionStartInput {
   session_id?: string;
@@ -17,7 +18,6 @@ interface SessionStartInput {
 
 export async function handleSessionStart(input: SessionStartInput): Promise<void> {
   try {
-    decayAllActivations();
     // 21.1: Neuer Session-Trend-Datenpunkt
     try { startNewSessionTrend(); } catch { /* non-fatal */ }
 
@@ -25,7 +25,9 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     const critical = isCriticalPeriod();
     const sessionId = input.session_id || `session-${Date.now()}`;
 
+    clearSessionActivationOverlay(sessionId);
     createSession('claude-code', sessionId);
+    initWorkingMemory(sessionId);
     getScope(sessionId);
 
     // V3 Phase 6: Consolidation bei >6h seit letzter
@@ -62,7 +64,7 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
 
     // Priming: load last session summary + use STANDARD mode at session start
     const lastSummary = getLastSessionSummary();
-    const context = generateContext('STANDARD');
+    const context = generateContext('STANDARD', undefined, undefined, undefined, undefined, undefined, undefined, sessionId);
 
     let systemMessage: string;
     if (context && context !== 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.') {

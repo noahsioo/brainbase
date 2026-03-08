@@ -62,8 +62,11 @@ export function measureStability(): StabilitySignal {
 }
 
 // Cached version
-export function getStability(): StabilitySignal {
+export function getStability(readOnly = false): StabilitySignal {
   const db = getDb();
+  if (readOnly) {
+    return measureStability();
+  }
   try {
     const row = db.prepare("SELECT value FROM system_state WHERE key = 'stability_signal'")
       .get() as { value: string } | undefined;

@@ -1,9 +1,15 @@
-import { addToRawBuffer, getDb, getNode, updateNode, setQueryEmbedding } from '../memory/store.js';
-import { activateByQuery, activateByConversation, primeActivations, applySTDP, getCurrentlyActivatedEntityIds, getLastSTDPEntities, setLastSTDPEntities, setCurrentEncodingContext, setSystemMode, setCurrentTaskMode, applyDisinhibition, clearDisinhibitionTargets, startNewCoherenceRound } from '../memory/activation.js';
+import { addToRawBuffer, createSession, getDb, getNode, getSession, updateNode, setQueryEmbedding } from '../memory/store.js';
+import { activateByQuery, activateByConversation, primeActivations, applySTDP, getCurrentlyActivatedEntityIds, getLastSTDPEntities, setLastSTDPEntities, setCurrentEncodingContext, setSystemMode, setCurrentTaskMode, applyDisinhibition, clearDisinhibitionTargets, startNewCoherenceRound, getSessionActivationValue, setSessionActivationValue } from '../memory/activation.js';
 import { generateContext, setSessionTopicEmbedding, type DetailMode } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
 import { getConfig } from '../config.js';
 import { extractFromPrompt } from '../extraction/code-extractor.js';
+import {
+  buildSemanticExtraction,
+  getPreferredSemanticIntent,
+  getPreferredSemanticTopic,
+  type SemanticExtraction,
+} from '../extraction/semantic-extractor.js';
 import { GATE_HEBBIAN, GATE_LLM } from '../signal/signal-strength.js';
 import { processThalamic, deriveSystemMode } from '../signal/thalamus.js';
 import { updateMetaProfile } from '../tacit/meta-learner.js';
@@ -29,6 +35,15 @@ import { shouldAllowLLMCall } from '../regulation/energy.js';
 import { analyzeEnvironment } from '../senses/environment-sense.js';
 import { integrateSenses } from '../senses/integration.js';
 import { recordContextModeDelivery } from '../learning/communication-learner.js';
+import { inferMessageIntent, updateWorkingMemory } from '../memory/working-memory.js';
+import {
+  setSessionAttentionState,
+  setSessionContextSignal,
+  setSessionEmpathyMode,
+  setSessionMood,
+  setSessionTaskMode as setRuntimeTaskMode,
+  setSessionTone,
+} from '../memory/session-runtime-state.js';
 
 interface UserPromptInput {
   session_id?: string;
@@ -47,6 +62,18 @@ export interface ProcessMessageResult {
   signal_score: number;
   signal_action: string;
 }
+
+const SEMANTIC_TOPIC_MIN_CONFIDENCE = 0.55;
+const SEMANTIC_ENTITY_MIN_CONFIDENCE = 0.5;
+const INVALID_LIVE_TOPIC_NAMES = new Set([
+  'conversation', 'session', 'message', 'request', 'topic', 'thema',
+  'project', 'projekt', 'task', 'aufgabe', 'general', 'allgemein',
+]);
+const GENERIC_LIVE_ENTITY_NAMES = new Set([
+  'das', 'dies', 'diese', 'dieser', 'es', 'it', 'this', 'that',
+  'thing', 'stuff', 'conversation', 'session', 'message', 'request',
+  'topic', 'project', 'task', 'problem', 'issue',
+]);
 
 // M28: Session Focus — cumulative entity counter for stable topic
 function updateSessionFocus(sessionId: string, newEntities: string[]): string[] {
@@ -146,11 +173,104 @@ function markEventBoundary(sessionId: string): void {
   }
 }
 
+function ensureSessionExists(sessionId: string, provider: string, contextOnly: boolean | undefined): void {
+  if (contextOnly) return;
+  if (!getSession(sessionId)) {
+    createSession(provider, sessionId);
+  }
+}
+
+function resolveEffectiveTopic(
+  semantic: SemanticExtraction,
+  fallbackTopic: string | undefined,
+): string | undefined {
+  const semanticTopic = normalizeLiveValue(getPreferredSemanticTopic(semantic)).toLowerCase();
+  const normalizedFallback = normalizeLiveValue(fallbackTopic).toLowerCase();
+  const hasValidSemanticTopic = semanticTopic && !INVALID_LIVE_TOPIC_NAMES.has(semanticTopic);
+
+  if (hasValidSemanticTopic && semantic.topic_confidence >= SEMANTIC_TOPIC_MIN_CONFIDENCE) {
+    return semanticTopic;
+  }
+
+  if (normalizedFallback) {
+    return normalizedFallback;
+  }
+
+  return hasValidSemanticTopic ? semanticTopic : undefined;
+}
+
+function resolveEffectiveEntities(
+  semantic: SemanticExtraction,
+  fallbackEntities: string[],
+  fallbackFocusEntities: string[],
+): string[] {
+  const semanticEntities = semantic.entities
+    .filter(entity =>
+      entity.confidence >= SEMANTIC_ENTITY_MIN_CONFIDENCE &&
+      isUsableLiveEntity(entity.name)
+    )
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 5)
+    .map(entity => entity.name);
+
+  if (semanticEntities.length > 0) {
+    return uniqueLiveValues(semanticEntities);
+  }
+
+  return uniqueLiveValues([...fallbackEntities, ...fallbackFocusEntities])
+    .filter(isUsableLiveEntity)
+    .slice(0, 5);
+}
+
+function resolveEffectiveIntent(semantic: SemanticExtraction, message: string) {
+  const preferredIntent = getPreferredSemanticIntent(semantic);
+  return preferredIntent !== 'other' ? preferredIntent : inferMessageIntent(message);
+}
+
+function isUsableLiveEntity(value: string): boolean {
+  const normalized = normalizeLiveValue(value);
+  if (normalized.length < 2) return false;
+  return !GENERIC_LIVE_ENTITY_NAMES.has(normalized.toLowerCase());
+}
+
+function uniqueLiveValues(values: string[]): string[] {
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeLiveValue(value);
+    if (!normalized) continue;
+    if (result.some(existing => existing.toLowerCase() === normalized.toLowerCase())) {
+      continue;
+    }
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+function normalizeLiveValue(value: string | undefined): string {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function writeSemanticExtractionState(sessionId: string, semantic: SemanticExtraction): void {
+  const db = getDb();
+  const now = Date.now();
+  const status = semantic.degraded ? 'degraded' : 'ready';
+
+  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+    .run(`semantic_extraction_status_${sessionId}`, status, now);
+  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+    .run(`semantic_extraction_source_${sessionId}`, semantic.source, now);
+}
+
 export async function processMessage(input: ProcessMessageInput): Promise<ProcessMessageResult> {
   const sessionId = input.session_id || `session-${Date.now()}`;
   const provider = input.provider || 'mcp';
+  const shouldPersistState = !input.context_only;
 
-  if (!input.context_only) {
+  ensureSessionExists(sessionId, provider, input.context_only);
+
+  if (shouldPersistState) {
     addToRawBuffer({
       session_id: sessionId,
       provider,
@@ -169,42 +289,61 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   // 10.3: Emotion-Bypass (Olfaktion — umgeht Thalamus direkt)
   const emotionBypass = detectEmotionBypass(input.message);
 
-  const signal = processThalamic(input.message, sessionId);
+  const signal = processThalamic(input.message, sessionId, { readOnly: !shouldPersistState });
   // M52: Gehirnwellen — set system mode for activation parameter modulation
-  setSystemMode(deriveSystemMode(signal.mode, signal.salienceMode), sessionId);
-  // M28: Stable session focus instead of volatile per-message entities
-  const focusEntities = updateSessionFocus(sessionId, signal.entities.slice(0, 5));
-  const currentTopic = focusEntities.length > 0 ? focusEntities.slice(0, 3).join(' ') : undefined;
+  if (shouldPersistState) {
+    setSystemMode(deriveSystemMode(signal.mode, signal.salienceMode), sessionId);
+  }
+  // Provisional heuristics still drive gates and early internal signals.
+  const provisionalFocusEntities = shouldPersistState
+    ? updateSessionFocus(sessionId, signal.entities.slice(0, 5))
+    : signal.entities.slice(0, 5);
+  const provisionalTopic = provisionalFocusEntities.length > 0
+    ? provisionalFocusEntities.slice(0, 3).join(' ')
+    : undefined;
 
   // M32: Task Switching Cost — smooth transition when topic changes
-  const topicChanged = applyTaskSwitchingCost(sessionId, currentTopic);
+  const topicChanged = shouldPersistState
+    ? applyTaskSwitchingCost(sessionId, provisionalTopic)
+    : false;
 
   // 12.1: Event Boundary — topic change = episode boundary
-  if (topicChanged) {
+  if (shouldPersistState && topicChanged) {
     markEventBoundary(sessionId);
   }
 
   const feedback = detectFeedbackSignal(input.message);
-  applyFeedbackToRecentNodes(feedback);
-  applyContextFeedback(feedback);
-  applySomaticMarkers(feedback);
-  applyFeedbackOutcome(feedback, sessionId);
-  trackProviderFeedback(feedback, provider);
-  // 21.3: Comparator — vergleiche Context-Prediction mit Feedback
-  compareAndCorrect(feedback);
+  if (shouldPersistState) {
+    applyFeedbackToRecentNodes(feedback);
+    applyContextFeedback(feedback, sessionId);
+    applySomaticMarkers(feedback);
+    applyFeedbackOutcome(feedback, sessionId);
+    trackProviderFeedback(feedback, provider);
+    // 21.3: Comparator — vergleiche Context-Prediction mit Feedback
+    compareAndCorrect(feedback, sessionId);
+  }
   let mood = detectMood(input.message, signal.flags.frustration);
-  setCurrentMood(mood);
+  if (shouldPersistState) {
+    setSessionMood(sessionId, mood);
+    setCurrentMood(mood);
+  }
 
   // 13.2: Empathy Mode — affective vs cognitive
   const empathyMode = detectEmpathyMode(input.message, mood);
-  getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run('current_empathy_mode', empathyMode, Date.now());
+  if (shouldPersistState) {
+    setSessionEmpathyMode(sessionId, empathyMode);
+    getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('current_empathy_mode', empathyMode, Date.now());
+  }
 
   // 10.3: Bypass overrides normal mood + boosts emotion nucleus
   if (emotionBypass.triggered) {
     if (emotionBypass.moodOverride) {
       mood = emotionBypass.moodOverride;
-      setCurrentMood(mood);
+      if (shouldPersistState) {
+        setSessionMood(sessionId, mood);
+        setCurrentMood(mood);
+      }
     }
     signal.nuclei.emotion.inhibited = Math.max(
       signal.nuclei.emotion.inhibited,
@@ -217,37 +356,48 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   }
 
   // 10.3: Sarcasm flag for extractor (reduces extraction confidence)
-  const dbSarcasm = getDb();
-  dbSarcasm.prepare("DELETE FROM system_state WHERE key = 'current_sarcasm'").run();
-  if (emotionBypass.type === 'sarcasm') {
-    dbSarcasm.prepare("INSERT INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-      .run('current_sarcasm', '1', Date.now());
+  if (shouldPersistState) {
+    const dbSarcasm = getDb();
+    dbSarcasm.prepare("DELETE FROM system_state WHERE key = 'current_sarcasm'").run();
+    if (emotionBypass.type === 'sarcasm') {
+      dbSarcasm.prepare("INSERT INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+        .run('current_sarcasm', '1', Date.now());
+    }
   }
 
   // 13.3: Task-Set Inference — store current task mode
-  getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run('current_task_mode', signal.taskMode, Date.now());
-  // 22.5: Adaptive Coding — Edge-Gewichte je nach TaskMode setzen
-  setCurrentTaskMode(signal.taskMode, sessionId);
+  if (shouldPersistState) {
+    setRuntimeTaskMode(sessionId, signal.taskMode);
+    getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('current_task_mode', signal.taskMode, Date.now());
+    // 22.5: Adaptive Coding — Edge-Gewichte je nach TaskMode setzen
+    setCurrentTaskMode(signal.taskMode, sessionId);
+  }
 
   // 10.5: Stability-Sense (Vestibular — bei Widerspruechen verlangsamen)
-  const stability = getStability();
+  const stability = getStability(!shouldPersistState);
   if (stability.needsAttention) {
     signal.nuclei.novelty.raw *= 0.7;
   }
 
   // 10.2: Tone-Sense (Audition — WIE es klingt)
   const tone = analyzeTone(input.message);
-  getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run('current_tone', JSON.stringify(tone), Date.now());
+  if (shouldPersistState) {
+    setSessionTone(sessionId, tone);
+    getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('current_tone', JSON.stringify(tone), Date.now());
+  }
   // 15.3: Drei Aufmerksamkeitssysteme
   const attentionState = calculateAttentionState(
     tone.urgency, signal.flags.frustration, signal.flags.explicit_memory,
     signal.entities.length, topicChanged,
     signal.nuclei.entity.raw, signal.taskMode,
   );
-  getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run('attention_state', JSON.stringify(attentionState), Date.now());
+  if (shouldPersistState) {
+    setSessionAttentionState(sessionId, attentionState);
+    getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('attention_state', JSON.stringify(attentionState), Date.now());
+  }
 
   // 15.3a: Alerting Override (subsumes tone.urgency > 0.7)
   if (attentionState.alerting > 0.7) {
@@ -257,18 +407,23 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
 
   // 10.6: Context-Sense (Somatosensorik — wo stehen wir gerade?)
   const contextSignal = analyzeContext(sessionId, provider);
-  getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run('context_signal', JSON.stringify(contextSignal), Date.now());
+  if (shouldPersistState) {
+    setSessionContextSignal(sessionId, contextSignal);
+    getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('context_signal', JSON.stringify(contextSignal), Date.now());
+  }
 
   // M36: Set encoding context for retrieval matching in activation
-  setCurrentEncodingContext({
-    mood,
-    topic: currentTopic,
-    provider,
-  }, sessionId);
+  if (shouldPersistState) {
+    setCurrentEncodingContext({
+      mood,
+      topic: provisionalTopic,
+      provider,
+    }, sessionId);
+  }
 
   // M37: Synaptic Tagging — emotional events capture recent memories
-  if (signal.nuclei.emotion.inhibited > 0.7) {
+  if (shouldPersistState && signal.nuclei.emotion.inhibited > 0.7) {
     const db = getDb();
     const fiveMinAgo = Date.now() - 5 * 60 * 1000;
     const recentNodes = db.prepare(
@@ -282,32 +437,34 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   }
 
   // M36+M38+M39+M40: Encoding Signal — write to system_state for extractors
-  const prediction = loadPrediction();
-  const predictionError = prediction ? calculatePredictionError(prediction, input.message) : 0;
+  if (shouldPersistState) {
+    const prediction = loadPrediction();
+    const predictionError = prediction ? calculatePredictionError(prediction, input.message) : 0;
 
-  const db2es = getDb();
-  const sessionRowEs = db2es.prepare(
-    'SELECT message_count FROM sessions WHERE id = ?'
-  ).get(sessionId) as { message_count: number } | undefined;
-  const msgIndex = sessionRowEs?.message_count ?? 0;
+    const db2es = getDb();
+    const sessionRowEs = db2es.prepare(
+      'SELECT message_count FROM sessions WHERE id = ?'
+    ).get(sessionId) as { message_count: number } | undefined;
+    const msgIndex = sessionRowEs?.message_count ?? 0;
 
-  const encodingSignal = {
-    novelty: signal.nuclei.novelty.raw,
-    prediction_error: predictionError,
-    self_generated: signal.flags.self_generated,
-    emotion_intensity: signal.nuclei.emotion.inhibited,
-    session_topic: currentTopic,
-    mood,
-    provider,
-    message_index: msgIndex,
-    sarcasm_detected: emotionBypass.type === 'sarcasm' || tone.intent === 'sarcastic' || tone.intent === 'humorous',
-    rhetorical_detected: tone.intent === 'rhetorical',
-    emotion_bypass_type: emotionBypass.triggered ? emotionBypass.type : null,
-    event_boundary: topicChanged,
-  };
+    const encodingSignal = {
+      novelty: signal.nuclei.novelty.raw,
+      prediction_error: predictionError,
+      self_generated: signal.flags.self_generated,
+      emotion_intensity: signal.nuclei.emotion.inhibited,
+      session_topic: provisionalTopic,
+      mood,
+      provider,
+      message_index: msgIndex,
+      sarcasm_detected: emotionBypass.type === 'sarcasm' || tone.intent === 'sarcastic' || tone.intent === 'humorous',
+      rhetorical_detected: tone.intent === 'rhetorical',
+      emotion_bypass_type: emotionBypass.triggered ? emotionBypass.type : null,
+      event_boundary: topicChanged,
+    };
 
-  db2es.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run(`encoding_signal_${sessionId}`, JSON.stringify(encodingSignal), Date.now());
+    db2es.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run(`encoding_signal_${sessionId}`, JSON.stringify(encodingSignal), Date.now());
+  }
 
   // 17.4: System-Mood → Extraction Modulation
   const systemMood = getSystemMood();
@@ -321,7 +478,9 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   // 21.1: Allostase — Trend-Tracking + antizipative Regulation
   try {
     const health = measureSystemHealth();
-    recordTrendPoint(health, signal.flags.frustration);
+    if (shouldPersistState) {
+      recordTrendPoint(health, signal.flags.frustration);
+    }
     const prediction = predictAllostasis();
     if (prediction.recommendation === 'tighten') {
       signal.combined *= 0.85;
@@ -335,26 +494,32 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     const sessionRow2 = getDb().prepare('SELECT message_count FROM sessions WHERE id = ?')
       .get(sessionId) as { message_count: number } | undefined;
     const tradeoffs = calculateTradeoffs(mood, signal.taskMode, sessionRow2?.message_count);
-    updateTradeoffState(tradeoffs);
+    if (shouldPersistState) {
+      updateTradeoffState(tradeoffs);
+    }
   } catch { /* non-fatal */ }
 
   // 21.5: Stress-Response — Graceful Degradation
-  try { calculateStressLevel(); } catch { /* non-fatal */ }
+  if (shouldPersistState) {
+    try { calculateStressLevel(); } catch { /* non-fatal */ }
+  }
 
   // 25.4: Environment Sense — Darm-Hirn-Analog
   let envSignal;
-  try { envSignal = analyzeEnvironment(); } catch { /* non-fatal */ }
+  if (shouldPersistState) {
+    try { envSignal = analyzeEnvironment(); } catch { /* non-fatal */ }
+  }
 
   // 25.7: Multisensorische Integration — Precision-weighted
   try {
-    if (envSignal) {
+    if (shouldPersistState && envSignal) {
       const percept = integrateSenses(tone, emotionBypass, stability, systemMood, envSignal);
       getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
         .run('integrated_percept', JSON.stringify(percept), Date.now());
     }
   } catch { /* non-fatal */ }
 
-  if (!input.context_only) {
+  if (shouldPersistState) {
     extractFromPrompt(input.message, sessionId, signal.flags);
 
     // 9.4: Active Information Seeking — detect learning opportunities
@@ -378,27 +543,13 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     }
   }
 
-  // Pre-embed query for semantic search (non-blocking, best-effort)
-  const embClient = createEmbeddingClient();
-  if (embClient) {
-    try {
-      const queryVec = await embClient.embed(input.message);
-      setQueryEmbedding(input.message, queryVec);
-      if (currentTopic) {
-        const topicVec = await embClient.embed(currentTopic);
-        setQueryEmbedding(currentTopic, topicVec);
-        setSessionTopicEmbedding(topicVec);
-      }
-    } catch {
-      // Fallback to keyword search
-    }
+  // 15.3b: Orienting → activation scope (before activation runs)
+  if (shouldPersistState) {
+    getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('orienting_level', String(attentionState.orienting), Date.now());
   }
 
-  // 15.3b: Orienting → activation scope (before activation runs)
-  getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run('orienting_level', String(attentionState.orienting), Date.now());
-
-  if (signal.combined >= GATE_HEBBIAN) {
+  if (shouldPersistState && signal.combined >= GATE_HEBBIAN) {
     // 23.1: Disinhibition — bei explicit_memory archivierte Nodes freischalten
     if (signal.flags.explicit_memory) {
       applyDisinhibition(input.message, sessionId);
@@ -426,22 +577,24 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     if (Object.keys(signal.dampening).length > 0) {
       for (const [entity, factor] of Object.entries(signal.dampening)) {
         const matches = db.prepare(
-          "SELECT id, activation FROM nodes WHERE LOWER(content) = LOWER(?) AND activation > 0"
-        ).all(entity) as Array<{ id: string; activation: number }>;
+          "SELECT id FROM nodes WHERE LOWER(content) = LOWER(?)"
+        ).all(entity) as Array<{ id: string }>;
         for (const match of matches) {
-          db.prepare('UPDATE nodes SET activation = ? WHERE id = ?')
-            .run(match.activation * factor, match.id);
+          const activation = getSessionActivationValue(match.id, sessionId);
+          if (activation > 0) {
+            setSessionActivationValue(match.id, sessionId, activation * factor);
+          }
         }
       }
     }
 
-    const currentEntities = getCurrentlyActivatedEntityIds();
+    const currentEntities = getCurrentlyActivatedEntityIds(10, sessionId);
     const previousEntities = getLastSTDPEntities(sessionId);
     applySTDP(previousEntities, currentEntities);
     setLastSTDPEntities(sessionId, currentEntities);
 
     // M45: Spacing Effect — track unique sessions for activated nodes
-    const activatedIds = getCurrentlyActivatedEntityIds();
+    const activatedIds = getCurrentlyActivatedEntityIds(10, sessionId);
     for (const nodeId of activatedIds.slice(0, 20)) {
       const node = getNode(nodeId);
       if (!node) continue;
@@ -458,15 +611,8 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   }
 
   // 23.1: Disinhibition Cleanup
-  clearDisinhibitionTargets(sessionId);
-
-  // 15.1: Feeling of Knowing
-  const fokSignal = detectFeelingOfKnowing(currentTopic);
-  if (fokSignal) {
-    getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-      .run('fok_signal', JSON.stringify(fokSignal), Date.now());
-  } else {
-    getDb().prepare("DELETE FROM system_state WHERE key = 'fok_signal'").run();
+  if (shouldPersistState) {
+    clearDisinhibitionTargets(sessionId);
   }
 
   // Prospective Memory: check if any triggers match
@@ -477,8 +623,9 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     signal.combined = Math.min(signal.combined, GATE_LLM - 0.01);
   }
 
+  let watcherResponse: Record<string, unknown> | null = null;
   let watcherSystemMessage: string | undefined;
-  if (!input.context_only && signal.combined >= GATE_LLM) {
+  if (shouldPersistState && signal.combined >= GATE_LLM) {
     const config = getConfig();
     if (config.watcher_engine !== 'none' && config.watcher_engine !== 'session') {
       const db = getDb();
@@ -487,7 +634,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       ).all(sessionId) as Array<{ content: string }>;
       const recentContext = recentRows.reverse().map(r => r.content).join('\n---\n');
 
-      const watcherResponse = await sendToWatcher('user-prompt', {
+      watcherResponse = await sendToWatcher('user-prompt', {
         session_id: sessionId,
         user_prompt: input.message,
         signal_score: signal.combined,
@@ -502,13 +649,88 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     }
   }
 
+  const effectiveSemantic = buildSemanticExtraction({
+    message: input.message,
+    sessionId,
+    provider,
+    watcherResponse,
+    fallbackTopic: provisionalTopic,
+    fallbackEntities: signal.entities.slice(0, 5),
+  });
+  const effectiveTopic = resolveEffectiveTopic(effectiveSemantic, provisionalTopic);
+  const effectiveEntities = resolveEffectiveEntities(
+    effectiveSemantic,
+    signal.entities,
+    provisionalFocusEntities,
+  );
+  const effectiveIntent = resolveEffectiveIntent(effectiveSemantic, input.message);
+
+  if (shouldPersistState) {
+    writeSemanticExtractionState(sessionId, effectiveSemantic);
+
+    updateWorkingMemory({
+      sessionId,
+      message: input.message,
+      inferredTopic: effectiveTopic,
+      focusEntities: effectiveEntities,
+      messageIntent: effectiveIntent,
+      references: effectiveSemantic.references,
+      degradedSemantic: effectiveSemantic.degraded,
+      taskMode: signal.taskMode,
+      mood,
+    });
+  }
+
+  // Keep the live encoding context aligned with the semantic topic after watcher/fallback resolution.
+  if (shouldPersistState) {
+    setCurrentEncodingContext({
+      mood,
+      topic: effectiveTopic,
+      provider,
+    }, sessionId);
+  }
+
+  // Pre-embed query for semantic search (non-blocking, best-effort)
+  if (shouldPersistState) {
+    const embClient = createEmbeddingClient();
+    if (embClient) {
+      try {
+        const queryVec = await embClient.embed(input.message);
+        setQueryEmbedding(input.message, queryVec);
+        if (effectiveTopic) {
+          const topicVec = await embClient.embed(effectiveTopic);
+          setQueryEmbedding(effectiveTopic, topicVec);
+          setSessionTopicEmbedding(topicVec);
+        } else {
+          setSessionTopicEmbedding(null);
+        }
+      } catch {
+        setSessionTopicEmbedding(null);
+        // Fallback to keyword search
+      }
+    } else {
+      setSessionTopicEmbedding(null);
+    }
+  }
+
+  // 15.1: Feeling of Knowing
+  if (shouldPersistState) {
+    const fokSignal = detectFeelingOfKnowing(effectiveTopic);
+    if (fokSignal) {
+      getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+        .run('fok_signal', JSON.stringify(fokSignal), Date.now());
+    } else {
+      getDb().prepare("DELETE FROM system_state WHERE key = 'fok_signal'").run();
+    }
+  }
+
   const db2 = getDb();
   const sessionRow = db2.prepare(
     'SELECT message_count FROM sessions WHERE id = ?'
   ).get(sessionId) as { message_count: number } | undefined;
   const messageCount = sessionRow?.message_count ?? 0;
 
-  if (!input.context_only) {
+  if (shouldPersistState) {
     if (messageCount % 5 === 0 || messageCount <= 1) {
       updateHotMemoryInDb();
     }
@@ -545,10 +767,22 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     contextMode = 'STANDARD';
   }
 
-  const context = generateContext(contextMode, currentTopic, mood, signal.mode, signal.salienceMode, signal.taskMode, provider);
+  const context = generateContext(
+    contextMode,
+    effectiveTopic,
+    mood,
+    signal.mode,
+    signal.salienceMode,
+    signal.taskMode,
+    provider,
+    sessionId,
+    !shouldPersistState,
+  );
 
   // 25.8: Communication Learner — Context-Effektivitaet tracken
-  try { recordContextModeDelivery(contextMode, context?.length || 0); } catch { /* non-fatal */ }
+  if (shouldPersistState) {
+    try { recordContextModeDelivery(contextMode, context?.length || 0); } catch { /* non-fatal */ }
+  }
 
   let finalContext = context;
 
@@ -561,24 +795,28 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       finalContext = finalContext ? finalContext + impulseBlock : impulseBlock;
 
       // Track: if user doesn't mention hungry entities next message, increment ignore
-      getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-        .run(`pending_impulses_${sessionId}`, JSON.stringify(hungerZones), Date.now());
+      if (shouldPersistState) {
+        getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+          .run(`pending_impulses_${sessionId}`, JSON.stringify(hungerZones), Date.now());
+      }
     }
   }
 
   // Check if previous impulses were ignored
-  const pendingRow = getDb().prepare("SELECT value FROM system_state WHERE key = ?")
-    .get(`pending_impulses_${sessionId}`) as { value: string } | undefined;
-  if (pendingRow) {
-    const pending: HungerZone[] = JSON.parse(pendingRow.value);
-    const ignoredZones = pending.filter(z =>
-      !input.message.toLowerCase().includes(z.entity.toLowerCase())
-    );
-    if (ignoredZones.length > 0) {
-      markImpulseIgnored(ignoredZones);
+  if (shouldPersistState) {
+    const pendingRow = getDb().prepare("SELECT value FROM system_state WHERE key = ?")
+      .get(`pending_impulses_${sessionId}`) as { value: string } | undefined;
+    if (pendingRow) {
+      const pending: HungerZone[] = JSON.parse(pendingRow.value);
+      const ignoredZones = pending.filter(z =>
+        !input.message.toLowerCase().includes(z.entity.toLowerCase())
+      );
+      if (ignoredZones.length > 0) {
+        markImpulseIgnored(ignoredZones);
+      }
+      getDb().prepare("DELETE FROM system_state WHERE key = ?")
+        .run(`pending_impulses_${sessionId}`);
     }
-    getDb().prepare("DELETE FROM system_state WHERE key = ?")
-      .run(`pending_impulses_${sessionId}`);
   }
 
   // Inject prospective memory reminders

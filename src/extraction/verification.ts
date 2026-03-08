@@ -8,9 +8,12 @@ export interface ExtractedFact {
   metadata?: { category?: string; quality?: number };
 }
 
+export type SemanticIntent = 'question' | 'statement' | 'request' | 'feedback' | 'greeting' | 'other';
+
 export interface ExtractedEntity {
   name: string;
   type: string; // person, technology, project, concept, tool, food, place, organization, skill
+  confidence?: number;
 }
 
 export interface ExtractedRelation {
@@ -20,11 +23,19 @@ export interface ExtractedRelation {
   confidence: number;
 }
 
+export interface ExtractedTopic {
+  name: string;
+  confidence: number;
+}
+
 export interface ExtractionResponse {
   nothing_new: boolean;
   entities?: ExtractedEntity[];
   relations?: ExtractedRelation[];
   new_facts: ExtractedFact[];
+  topic?: ExtractedTopic;
+  intent?: SemanticIntent;
+  references?: string[];
   emotion: {
     type: string;
     intensity: number;
@@ -343,6 +354,7 @@ export function verifyEntity(entity: ExtractedEntity): ExtractedEntity | null {
   return {
     name: entity.name.trim(),
     type: entityType,
+    confidence: entity.confidence,
   };
 }
 

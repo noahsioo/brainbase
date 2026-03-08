@@ -1,0 +1,10 @@
+src/
+assets/
+docs/
+*.ts
+!dist/**
+tsconfig.json
+.git/
+.github/
+CONTRIBUTING.md
+SECURITY.md

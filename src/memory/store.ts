@@ -95,6 +95,31 @@ export interface Session {
   productivity: number | null;
 }
 
+export interface WorkingMemory {
+  session_id: string;
+  current_topic: string;
+  topic_history: string[];
+  active_entities: Record<string, number>;
+  conversation_summary: string;
+  open_questions: string[];
+  context_stack: string[];
+  references?: string[];
+  degraded_semantic?: boolean;
+  last_message_intent: 'question' | 'statement' | 'request' | 'feedback' | 'greeting' | 'other';
+  message_count: number;
+  last_user_message: string;
+  last_assistant_message: string;
+  updated_at: number;
+  version: number;
+}
+
+export interface SessionActivationRow {
+  session_id: string;
+  node_id: string;
+  activation: number;
+  activated_at: number;
+}
+
 export interface RawBufferEntry {
   id: string;
   session_id: string;
@@ -248,6 +273,43 @@ function initSchema(db: Database.Database): void {
       productivity REAL
     );
 
+    CREATE TABLE IF NOT EXISTS working_memory (
+      session_id TEXT PRIMARY KEY,
+      current_topic TEXT DEFAULT '',
+      topic_history TEXT DEFAULT '[]',
+      active_entities TEXT DEFAULT '{}',
+      conversation_summary TEXT DEFAULT '',
+      open_questions TEXT DEFAULT '[]',
+      context_stack TEXT DEFAULT '[]',
+      "references" TEXT DEFAULT '[]',
+      degraded_semantic INTEGER DEFAULT 0,
+      last_message_intent TEXT DEFAULT 'other',
+      message_count INTEGER DEFAULT 0,
+      last_user_message TEXT DEFAULT '',
+      last_assistant_message TEXT DEFAULT '',
+      updated_at INTEGER NOT NULL,
+      version INTEGER DEFAULT 1,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS session_activations (
+      session_id TEXT NOT NULL,
+      node_id TEXT NOT NULL,
+      activation REAL DEFAULT 0.0,
+      activated_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, node_id),
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS engrams (
+      id TEXT PRIMARY KEY,
+      node_ids TEXT NOT NULL,
+      activation_count INTEGER DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      last_activated INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS snapshots (
       id TEXT PRIMARY KEY,
       date TEXT NOT NULL,
@@ -276,12 +338,20 @@ function initSchema(db: Database.Database): void {
       token_count INTEGER DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS system_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
     CREATE INDEX IF NOT EXISTS idx_nodes_importance ON nodes(importance);
     CREATE INDEX IF NOT EXISTS idx_nodes_created ON nodes(created_at);
     CREATE INDEX IF NOT EXISTS idx_nodes_activation ON nodes(activation);
     CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
     CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
+    CREATE INDEX IF NOT EXISTS idx_session_activations_session_activation ON session_activations(session_id, activation DESC);
+    CREATE INDEX IF NOT EXISTS idx_session_activations_session_time ON session_activations(session_id, activated_at DESC);
     CREATE TABLE IF NOT EXISTS signal_counters (
       entity TEXT PRIMARY KEY,
       count INTEGER DEFAULT 1,
@@ -311,6 +381,7 @@ function initSchema(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_raw_buffer_processed ON raw_buffer(processed);
     CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider);
+    CREATE INDEX IF NOT EXISTS idx_system_state_updated_at ON system_state(updated_at);
     CREATE INDEX IF NOT EXISTS idx_signal_counters_count ON signal_counters(count);
     CREATE INDEX IF NOT EXISTS idx_tacit_patterns_category ON tacit_patterns(category);
     CREATE INDEX IF NOT EXISTS idx_tacit_patterns_observations ON tacit_patterns(observations);
@@ -331,6 +402,16 @@ function migrateSchema(db: Database.Database): void {
   const edgeCols = db.prepare("PRAGMA table_info(edges)").all() as Array<{ name: string }>;
   if (!edgeCols.some(c => c.name === 'metadata')) {
     db.exec("ALTER TABLE edges ADD COLUMN metadata TEXT");
+  }
+
+  const workingMemoryCols = db.prepare("PRAGMA table_info(working_memory)").all() as Array<{ name: string }>;
+  if (workingMemoryCols.length > 0) {
+    if (!workingMemoryCols.some(c => c.name === 'references')) {
+      db.exec('ALTER TABLE working_memory ADD COLUMN "references" TEXT DEFAULT \'[]\'');
+    }
+    if (!workingMemoryCols.some(c => c.name === 'degraded_semantic')) {
+      db.exec('ALTER TABLE working_memory ADD COLUMN degraded_semantic INTEGER DEFAULT 0');
+    }
   }
 }
 
@@ -749,6 +830,64 @@ export function getSession(id: string): Session | null {
   const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as (Session & { topics: string }) | undefined;
   if (!row) return null;
   return { ...row, topics: JSON.parse(row.topics as string) };
+}
+
+export function upsertSessionActivation(
+  sessionId: string,
+  nodeId: string,
+  activation: number,
+  activatedAt = Date.now(),
+): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO session_activations (session_id, node_id, activation, activated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(session_id, node_id) DO UPDATE SET
+      activation = excluded.activation,
+      activated_at = excluded.activated_at
+  `).run(sessionId, nodeId, activation, activatedAt);
+}
+
+export function getSessionActivation(sessionId: string, nodeId: string): SessionActivationRow | null {
+  const db = getDb();
+  return (
+    db.prepare(
+      'SELECT session_id, node_id, activation, activated_at FROM session_activations WHERE session_id = ? AND node_id = ?',
+    ).get(sessionId, nodeId) as SessionActivationRow | undefined
+  ) ?? null;
+}
+
+export function getSessionActivationRows(
+  sessionId: string,
+  limit?: number,
+  minActivation?: number,
+): SessionActivationRow[] {
+  const db = getDb();
+  let query = `
+    SELECT session_id, node_id, activation, activated_at
+    FROM session_activations
+    WHERE session_id = ?
+  `;
+  const params: unknown[] = [sessionId];
+
+  if (minActivation !== undefined) {
+    query += ' AND activation >= ?';
+    params.push(minActivation);
+  }
+
+  query += ' ORDER BY activation DESC, activated_at DESC';
+
+  if (limit !== undefined) {
+    query += ' LIMIT ?';
+    params.push(limit);
+  }
+
+  return db.prepare(query).all(...params) as SessionActivationRow[];
+}
+
+export function deleteSessionActivations(sessionId: string): void {
+  const db = getDb();
+  db.prepare('DELETE FROM session_activations WHERE session_id = ?').run(sessionId);
 }
 
 // ── Hot Memory ──────────────────────────────────────────────

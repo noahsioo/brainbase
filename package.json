@@ -1,5 +1,5 @@
 {
-  "name": "brainbase",
+  "name": "brainbase-cli",
   "version": "0.1.0",
   "description": "Cross-provider persistent memory system for AI coding assistants",
   "license": "Elastic-2.0",
@@ -14,11 +14,11 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@clack/prompts": "^0.10.0",
     "better-sqlite3": "^11.7.0",
     "chalk": "^5.4.1",
     "chokidar": "^4.0.3",
-    "commander": "^13.1.0",
-    "@clack/prompts": "^0.10.0"
+    "commander": "^13.1.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

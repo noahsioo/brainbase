@@ -263,7 +263,7 @@ src/
 
 ## Privacy
 
-Your brain runs **100% locally**. SQLite database on your machine. No cloud. No telemetry. No data leaves your device.
+Your brain runs **100% locally**. SQLite database on your machine. No cloud. No telemetry. No data leaves your device — except conversation excerpts sent to your configured LLM provider for knowledge extraction.
 
 Your data is yours. Always.
 

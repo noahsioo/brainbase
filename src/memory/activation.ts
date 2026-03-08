@@ -9,14 +9,19 @@ import {
   strengthenEdge,
   weakenEdge,
   getEmbedding,
+  getSessionActivation,
+  getSessionActivationRows,
+  upsertSessionActivation,
+  deleteSessionActivations,
   type Node,
   type Edge,
+  type SessionActivationRow,
 } from './store.js';
 import type { NodeMetadata } from './store.js';
 import { getCurrentMood } from '../signal/echo.js';
 import { boostCoActivatedCluster } from '../learning/cluster-tracker.js';
 import { getEmbeddingCache, cosineSimilarity } from '../llm/embeddings.js';
-import { recordActivationPattern, completeEngrams } from './engrams.js';
+import { ensureEngramTable, recordActivationPattern } from './engrams.js';
 import { getDevelopmentPhase } from './cold-start.js';
 import { getMetaplasticLearningRate, getRetrogradeDampening } from '../regulation/feedback-channels.js';
 import { getHubDecayFactor } from '../regulation/hub-protection.js';
@@ -123,6 +128,152 @@ function recordEdgeFiring(edgeId: string): void {
   }
 }
 
+export function materializeNodeActivation(node: Node, activation: number): Node {
+  return {
+    ...node,
+    activation: Math.max(0, Math.min(1, activation)),
+  };
+}
+
+function isRetrievableActivatedNode(node: Node): boolean {
+  if (!node.metadata) return true;
+  try {
+    const meta = JSON.parse(node.metadata);
+    return !meta.visibility_tier || meta.visibility_tier === 'active';
+  } catch {
+    return true;
+  }
+}
+
+function applyRetrievalWeighting(nodes: Node[]): void {
+  for (const node of nodes) {
+    // M35: Complementary Learning Tiers — fragile memories get less retrieval weight
+    // 12.4: Cortical nodes skip tier penalty — quasi-permanent
+    let meta: Record<string, unknown> = {};
+    try { meta = node.metadata ? JSON.parse(node.metadata) : {}; } catch {}
+    if (meta.memory_tier === 'cortical') {
+      const edgeCount = getEdgesForNode(node.id).length;
+      if (edgeCount > 20) {
+        node.activation *= Math.max(0.5, 1.0 - (edgeCount - 20) * 0.02);
+      }
+      continue;
+    }
+
+    const isTier1 = node.confidence < 0.5 || node.activation_count < 5;
+    if (isTier1) {
+      node.activation *= 0.6;
+    }
+
+    // M48: Cue Overload — generic high-degree nodes get retrieval penalty
+    const edgeCount = getEdgesForNode(node.id).length;
+    if (edgeCount > 20) {
+      node.activation *= Math.max(0.5, 1.0 - (edgeCount - 20) * 0.02);
+    }
+  }
+}
+
+function finalizeActivatedNodeSelection(nodes: Node[], limit: number): Node[] {
+  const retrievable = nodes.filter(isRetrievableActivatedNode);
+  applyRetrievalWeighting(retrievable);
+  retrievable.sort((a, b) => b.activation - a.activation);
+  return retrievable.slice(0, limit);
+}
+
+function materializeSessionActivationRow(row: SessionActivationRow): Node | null {
+  const node = getNode(row.node_id);
+  if (!node) return null;
+  return materializeNodeActivation(node, row.activation);
+}
+
+function getNodeWithSessionActivation(nodeId: string, sessionId: string): Node | null {
+  const node = getNode(nodeId);
+  if (!node) return null;
+  return materializeNodeActivation(node, getSessionActivationValue(nodeId, sessionId));
+}
+
+function setSessionNodeActivation(
+  node: Node,
+  sessionId: string,
+  activation: number,
+  opts?: {
+    activatedAt?: number;
+    touchLastActivated?: boolean;
+    incrementActivationCount?: boolean;
+  },
+): Node | null {
+  const activatedAt = opts?.activatedAt ?? Date.now();
+  const normalized = Number.isFinite(activation)
+    ? Math.max(0, Math.min(1, activation))
+    : 0;
+
+  setSessionActivationValue(node.id, sessionId, normalized, activatedAt);
+
+  const updates: Partial<Pick<Node, 'activation_count' | 'last_activated'>> = {};
+  if (opts?.touchLastActivated) {
+    updates.last_activated = activatedAt;
+  }
+  if (opts?.incrementActivationCount) {
+    updates.activation_count = (node.activation_count || 0) + 1;
+  }
+  if (Object.keys(updates).length > 0) {
+    updateNode(node.id, updates);
+  }
+
+  const refreshed = getNode(node.id);
+  return refreshed
+    ? materializeNodeActivation(refreshed, normalized)
+    : materializeNodeActivation(node, normalized);
+}
+
+function syncActivatedNode(
+  activatedNodes: Map<string, Node>,
+  nodeId: string,
+  sessionId: string,
+): void {
+  const refreshed = getNodeWithSessionActivation(nodeId, sessionId);
+  if (!refreshed || refreshed.activation < MIN_ACTIVATION) {
+    activatedNodes.delete(nodeId);
+    return;
+  }
+  activatedNodes.set(nodeId, refreshed);
+}
+
+export function getSessionActivationValue(nodeId: string, sessionId: string): number {
+  return getSessionActivation(sessionId, nodeId)?.activation ?? 0;
+}
+
+export function setSessionActivationValue(
+  nodeId: string,
+  sessionId: string,
+  activation: number,
+  activatedAt = Date.now(),
+): void {
+  const normalized = Number.isFinite(activation)
+    ? Math.max(0, Math.min(1, activation))
+    : 0;
+  upsertSessionActivation(sessionId, nodeId, normalized, activatedAt);
+}
+
+export function getActivatedNodesFromSessionOverlay(
+  sessionId: string,
+  limit = 20,
+  minActivation = MIN_ACTIVATION,
+): Node[] {
+  if (limit <= 0) return [];
+
+  const fetchLimit = Math.max(limit * 3, limit);
+  const rows = getSessionActivationRows(sessionId, fetchLimit, minActivation);
+  const nodes = rows
+    .map(materializeSessionActivationRow)
+    .filter((node): node is Node => node !== null);
+
+  return finalizeActivatedNodeSelection(nodes, limit);
+}
+
+export function clearSessionActivationOverlay(sessionId: string): void {
+  deleteSessionActivations(sessionId);
+}
+
 export const EDGE_TYPES = [
   'related_to',
   'part_of',
@@ -168,6 +319,7 @@ export interface ActivationResult {
 export function activateNode(nodeId: string, energy = 1.0, sessionId = 'default'): ActivationResult {
   const node = getNode(nodeId);
   if (!node) return { activated: [], edges: [], inhibited: 0 };
+  const liveNode = materializeNodeActivation(node, getSessionActivationValue(nodeId, sessionId));
 
   // 19.1: Skip archived nodes — they exist but shouldn't activate
   if (node.metadata) {
@@ -188,9 +340,9 @@ export function activateNode(nodeId: string, energy = 1.0, sessionId = 'default'
   const timeSinceLastActivation = now - (node.last_activated || 0);
   const REFRACTORY_WINDOW = 30 * 1000;
   let refractoryDampen = 1.0;
-  if (timeSinceLastActivation < REFRACTORY_WINDOW && node.activation > 0.5) {
+  if (timeSinceLastActivation < REFRACTORY_WINDOW && liveNode.activation > 0.5) {
     const timeFactor = timeSinceLastActivation / REFRACTORY_WINDOW;
-    const strengthFactor = (node.activation - 0.5) * 2;
+    const strengthFactor = (liveNode.activation - 0.5) * 2;
     refractoryDampen = 0.3 + 0.7 * timeFactor;
     refractoryDampen = Math.min(1.0, refractoryDampen + (1 - strengthFactor) * 0.3);
   }
@@ -235,8 +387,8 @@ export function activateNode(nodeId: string, energy = 1.0, sessionId = 'default'
 
   const newActivationCount = (node.activation_count || 0) + 1;
 
+  setSessionActivationValue(nodeId, sessionId, totalEnergy, now);
   updateNode(nodeId, {
-    activation: totalEnergy,
     activation_count: newActivationCount,
     last_activated: now,
   });
@@ -248,20 +400,20 @@ export function activateNode(nodeId: string, energy = 1.0, sessionId = 'default'
   const activatedNodes: Map<string, Node> = new Map();
   const touchedEdges: Edge[] = [];
 
-  const updatedNode = getNode(nodeId);
+  const updatedNode = getNodeWithSessionActivation(nodeId, sessionId);
   if (updatedNode) {
     activatedNodes.set(nodeId, updatedNode);
     reconsolidate(updatedNode);
   }
 
   if (node.chunk_id) {
-    expandChunk(node.chunk_id, totalEnergy * 0.3, activatedNodes);
+    expandChunk(node.chunk_id, totalEnergy * 0.3, activatedNodes, sessionId);
   }
 
   spread(nodeId, totalEnergy, 0, activatedNodes, touchedEdges, new Set([nodeId]), sessionId);
-  antiHebbianPass(nodeId, activatedNodes);
+  antiHebbianPass(nodeId, activatedNodes, sessionId);
 
-  const inhibited = applyCompetitiveInhibition(activatedNodes);
+  const inhibited = applyCompetitiveInhibition(activatedNodes, sessionId);
 
   const budgetedNodes = Array.from(activatedNodes.values())
     .sort((a, b) => b.activation - a.activation)
@@ -278,6 +430,7 @@ function expandChunk(
   chunkId: string,
   energy: number,
   activatedNodes: Map<string, Node>,
+  sessionId: string,
 ): void {
   const db = getDb();
   const chunk = db.prepare('SELECT node_ids FROM chunks WHERE id = ?').get(chunkId) as { node_ids: string } | undefined;
@@ -292,11 +445,12 @@ function expandChunk(
 
   for (const nid of nodeIds) {
     if (activatedNodes.has(nid)) continue;
-    const node = getNode(nid);
+    const node = getNodeWithSessionActivation(nid, sessionId);
     if (!node) continue;
     const newActivation = Math.min(1.0, (node.activation || 0) + energy);
-    updateNode(nid, { activation: newActivation, last_activated: Date.now() });
-    const refreshed = getNode(nid);
+    const refreshed = setSessionNodeActivation(node, sessionId, newActivation, {
+      touchLastActivated: true,
+    });
     if (refreshed) activatedNodes.set(nid, refreshed);
   }
 }
@@ -331,10 +485,13 @@ function spread(
 
     // M49: replaced_by inhibits like contradicts
     if (edge.type === 'contradicts' || edge.type === 'replaced_by') {
-      const neighbor = getNode(neighborId);
+      const neighbor = getNodeWithSessionActivation(neighborId, sessionId);
       if (neighbor) {
         const inhibitedActivation = Math.max(0, (neighbor.activation || 0) - energy * edge.strength * 0.3);
-        updateNode(neighborId, { activation: inhibitedActivation });
+        setSessionActivationValue(neighborId, sessionId, inhibitedActivation);
+        if (activatedNodes.has(neighborId)) {
+          syncActivatedNode(activatedNodes, neighborId, sessionId);
+        }
         // 16.5: Inhibitory Plasticity — staerke Inhibitions-Edge wenn bestaetigt
         if (energy > 0.3 && (neighbor.activation || 0) > 0.1) {
           strengthenEdge(edge.id, 0.02);
@@ -383,7 +540,7 @@ function spread(
 
     if (spreadEnergy < MIN_ACTIVATION) continue;
 
-    const neighbor = getNode(neighborId);
+    const neighbor = getNodeWithSessionActivation(neighborId, sessionId);
     if (!neighbor) continue;
 
     const preActivation = neighbor.activation || 0;
@@ -394,17 +551,15 @@ function spread(
       targetRefractoryDampen = 0.3 + 0.7 * (targetTimeSince / 30000);
     }
     const newActivation = Math.min(1.0, preActivation + spreadEnergy * targetRefractoryDampen);
-    updateNode(neighborId, {
-      activation: newActivation,
-      last_activated: Date.now(),
+    const refreshed = setSessionNodeActivation(neighbor, sessionId, newActivation, {
+      touchLastActivated: true,
     });
 
-    hebbianStrengthening(edge.id, nodeId, neighborId);
-    antiHebbianWeakening(edge.id, nodeId, preActivation);
+    hebbianStrengthening(edge.id, nodeId, neighborId, sessionId);
+    antiHebbianWeakening(edge.id, nodeId, preActivation, sessionId);
     touchedEdges.push(edge);
     recordEdgeFiring(edge.id);
 
-    const refreshed = getNode(neighborId);
     if (refreshed) activatedNodes.set(neighborId, refreshed);
 
     if (activatedNodes.size < effectiveBudget) {
@@ -415,9 +570,9 @@ function spread(
   }
 }
 
-function hebbianStrengthening(edgeId: string, sourceId: string, targetId: string): void {
-  const source = getNode(sourceId);
-  const target = getNode(targetId);
+function hebbianStrengthening(edgeId: string, sourceId: string, targetId: string, sessionId: string): void {
+  const source = getNodeWithSessionActivation(sourceId, sessionId);
+  const target = getNodeWithSessionActivation(targetId, sessionId);
   if (!source || !target) return;
 
   if (source.activation > 0.1 && target.activation > 0.1) {
@@ -440,8 +595,8 @@ function hebbianStrengthening(edgeId: string, sourceId: string, targetId: string
   }
 }
 
-function antiHebbianWeakening(edgeId: string, sourceId: string, targetPreActivation: number): void {
-  const source = getNode(sourceId);
+function antiHebbianWeakening(edgeId: string, sourceId: string, targetPreActivation: number, sessionId: string): void {
+  const source = getNodeWithSessionActivation(sourceId, sessionId);
   if (!source) return;
 
   if (source.activation > 0.3 && targetPreActivation < 0.05) {
@@ -451,8 +606,8 @@ function antiHebbianWeakening(edgeId: string, sourceId: string, targetPreActivat
   }
 }
 
-function antiHebbianPass(nodeId: string, activatedNodes: Map<string, Node>): void {
-  const source = getNode(nodeId);
+function antiHebbianPass(nodeId: string, activatedNodes: Map<string, Node>, sessionId: string): void {
+  const source = getNodeWithSessionActivation(nodeId, sessionId);
   if (!source || source.activation < 0.3) return;
 
   const edges = getEdgesForNode(nodeId);
@@ -460,7 +615,7 @@ function antiHebbianPass(nodeId: string, activatedNodes: Map<string, Node>): voi
     const neighborId = edge.source_id === nodeId ? edge.target_id : edge.source_id;
     if (activatedNodes.has(neighborId)) continue;
 
-    const neighbor = getNode(neighborId);
+    const neighbor = getNodeWithSessionActivation(neighborId, sessionId);
     if (!neighbor) continue;
     if (neighbor.activation < 0.05) {
       weakenEdge(edge.id, 0.02);
@@ -468,7 +623,7 @@ function antiHebbianPass(nodeId: string, activatedNodes: Map<string, Node>): voi
   }
 }
 
-function applyCompetitiveInhibition(activatedNodes: Map<string, Node>): number {
+function applyCompetitiveInhibition(activatedNodes: Map<string, Node>, sessionId: string): number {
   if (activatedNodes.size <= INHIBITION_TOP_N) return 0;
 
   const sorted = Array.from(activatedNodes.values())
@@ -484,14 +639,13 @@ function applyCompetitiveInhibition(activatedNodes: Map<string, Node>): number {
     const inhibitionStrength = maxWinnerActivation * 0.5;
     const inhibitedActivation = Math.max(0, node.activation - inhibitionStrength);
 
-    updateNode(id, { activation: inhibitedActivation });
+    setSessionActivationValue(id, sessionId, inhibitedActivation);
 
     if (inhibitedActivation < MIN_ACTIVATION) {
       activatedNodes.delete(id);
       inhibitedCount++;
     } else {
-      const refreshed = getNode(id);
-      if (refreshed) activatedNodes.set(id, refreshed);
+      syncActivatedNode(activatedNodes, id, sessionId);
     }
   }
 
@@ -672,48 +826,16 @@ function decayUnusedEdges(): void {
   }
 }
 
-export function getActivatedNodes(limit = 20): Node[] {
-  const db = getDb();
-  let nodes = db.prepare(
-    'SELECT * FROM nodes WHERE activation > 0 ORDER BY activation DESC LIMIT ?',
-  ).all(limit * 2) as Node[];
-
-  // 19.1: Filter out archived nodes
-  nodes = nodes.filter(n => {
-    if (!n.metadata) return true;
-    try {
-      const meta = JSON.parse(n.metadata);
-      return !meta.visibility_tier || meta.visibility_tier === 'active';
-    } catch { return true; }
-  });
-
-  // M35: Complementary Learning Tiers — fragile memories get less retrieval weight
-  for (const node of nodes) {
-    // 12.4: Cortical nodes skip tier penalty — quasi-permanent
-    let meta: Record<string, unknown> = {};
-    try { meta = node.metadata ? JSON.parse(node.metadata) : {}; } catch {}
-    if (meta.memory_tier === 'cortical') {
-      const edgeCount = getEdgesForNode(node.id).length;
-      if (edgeCount > 20) {
-        node.activation *= Math.max(0.5, 1.0 - (edgeCount - 20) * 0.02);
-      }
-      continue;
-    }
-
-    const isTier1 = node.confidence < 0.5 || node.activation_count < 5;
-    if (isTier1) {
-      node.activation *= 0.6;
-    }
-
-    // M48: Cue Overload — generic high-degree nodes get retrieval penalty
-    const edgeCount = getEdgesForNode(node.id).length;
-    if (edgeCount > 20) {
-      node.activation *= Math.max(0.5, 1.0 - (edgeCount - 20) * 0.02);
-    }
+export function getActivatedNodes(limit = 20, sessionId?: string): Node[] {
+  if (sessionId) {
+    return getActivatedNodesFromSessionOverlay(sessionId, limit);
   }
 
-  nodes.sort((a, b) => b.activation - a.activation);
-  return nodes.slice(0, limit);
+  const db = getDb();
+  const nodes = db.prepare(
+    'SELECT * FROM nodes WHERE activation > 0 ORDER BY activation DESC LIMIT ?',
+  ).all(limit * 2) as Node[];
+  return finalizeActivatedNodeSelection(nodes, limit);
 }
 
 function extractWords(text: string): Set<string> {
@@ -864,15 +986,15 @@ function semanticAutoLink(nodeId: string, node: Node, maxEdges: number = AUTO_LI
 export function primeActivations(factor: number = 0.3, sessionId?: string): void {
   const db = getDb();
   if (sessionId) {
-    const scope = getScope(sessionId);
-    if (scope.activatedNodeIds.size > 0) {
-      const ids = Array.from(scope.activatedNodeIds);
-      for (let i = 0; i < ids.length; i += 50) {
-        const batch = ids.slice(i, i + 50);
-        const placeholders = batch.map(() => '?').join(',');
-        db.prepare(`UPDATE nodes SET activation = activation * ? WHERE id IN (${placeholders}) AND activation > 0`)
-          .run(factor, ...batch);
-      }
+    const rows = getSessionActivationRows(sessionId, undefined, MIN_ACTIVATION);
+    for (const row of rows) {
+      const primed = row.activation * factor;
+      setSessionActivationValue(
+        row.node_id,
+        sessionId,
+        primed < MIN_ACTIVATION ? 0 : primed,
+        row.activated_at,
+      );
     }
   } else {
     db.prepare('UPDATE nodes SET activation = activation * ? WHERE activation > 0').run(factor);
@@ -917,12 +1039,11 @@ function applyInhibitionOfReturn(
     const node = activatedNodes.get(nodeId);
     if (node) {
       const penalized = Math.max(0, node.activation - 0.2);
-      updateNode(nodeId, { activation: penalized });
+      setSessionActivationValue(nodeId, sessionId, penalized);
       if (penalized < MIN_ACTIVATION) {
         activatedNodes.delete(nodeId);
       } else {
-        const refreshed = getNode(nodeId);
-        if (refreshed) activatedNodes.set(nodeId, refreshed);
+        syncActivatedNode(activatedNodes, nodeId, sessionId);
       }
     }
   }
@@ -935,7 +1056,7 @@ function applyInhibitionOfReturn(
 
 // ── Mechanism 16: Pattern Completion ─────────────────────────
 
-function patternComplete(activatedNodes: Map<string, Node>): void {
+function patternComplete(activatedNodes: Map<string, Node>, sessionId: string): void {
   const db = getDb();
   const chunks = db.prepare(
     'SELECT id, node_ids FROM chunks'
@@ -954,21 +1075,59 @@ function patternComplete(activatedNodes: Map<string, Node>): void {
     if (ratio >= 0.6) {
       for (const id of nodeIds) {
         if (activatedNodes.has(id)) continue;
-        const node = getNode(id);
+        const node = getNodeWithSessionActivation(id, sessionId);
         if (!node) continue;
 
         const fillActivation = Math.min(1.0, (node.activation || 0) + 0.1);
-        updateNode(id, { activation: fillActivation, last_activated: Date.now() });
-        const refreshed = getNode(id);
+        const refreshed = setSessionNodeActivation(node, sessionId, fillActivation, {
+          touchLastActivated: true,
+        });
         if (refreshed) activatedNodes.set(id, refreshed);
       }
     }
   }
 }
 
+function completeEngramsSessionAware(activatedNodes: Map<string, Node>, sessionId: string): number {
+  ensureEngramTable();
+  const db = getDb();
+  const engrams = db.prepare('SELECT node_ids FROM engrams WHERE activation_count >= ?')
+    .all(3) as Array<{ node_ids: string }>;
+
+  let completed = 0;
+
+  for (const engram of engrams) {
+    let engramNodes: string[];
+    try { engramNodes = JSON.parse(engram.node_ids); }
+    catch { continue; }
+
+    const activeCount = engramNodes.filter(id => activatedNodes.has(id)).length;
+    const ratio = activeCount / engramNodes.length;
+
+    if (ratio >= 0.5) {
+      for (const id of engramNodes) {
+        if (activatedNodes.has(id)) continue;
+        const node = getNodeWithSessionActivation(id, sessionId);
+        if (!node) continue;
+
+        const fillActivation = Math.min(1.0, (node.activation || 0) + 0.15);
+        const refreshed = setSessionNodeActivation(node, sessionId, fillActivation, {
+          touchLastActivated: true,
+        });
+        if (refreshed) {
+          activatedNodes.set(id, refreshed);
+          completed++;
+        }
+      }
+    }
+  }
+
+  return completed;
+}
+
 // ── 22.1: Retrieval-Induced Forgetting ────────────────────────
 
-function applyRetrievalInducedForgetting(activatedNodes: Map<string, Node>): number {
+function applyRetrievalInducedForgetting(activatedNodes: Map<string, Node>, sessionId: string): number {
   if (activatedNodes.size < 5) return 0;
 
   const topNodes = Array.from(activatedNodes.values())
@@ -976,16 +1135,14 @@ function applyRetrievalInducedForgetting(activatedNodes: Map<string, Node>): num
     .slice(0, 10);
   const topIds = new Set(topNodes.map(n => n.id));
 
-  const db = getDb();
-  const placeholders = topNodes.map(() => '?').join(',');
-  const candidates = db.prepare(
-    `SELECT id, activation FROM nodes WHERE activation > 0.05 AND id NOT IN (${placeholders}) LIMIT 30`
-  ).all(...topNodes.map(n => n.id)) as Array<{ id: string; activation: number }>;
+  const candidates = getSessionActivationRows(sessionId, 60, 0.05)
+    .filter(row => !topIds.has(row.node_id))
+    .slice(0, 30);
 
   let suppressed = 0;
 
   for (const candidate of candidates) {
-    const candidateVec = getEmbedding(candidate.id);
+    const candidateVec = getEmbedding(candidate.node_id);
     if (!candidateVec) continue;
 
     let maxSim = 0;
@@ -998,8 +1155,8 @@ function applyRetrievalInducedForgetting(activatedNodes: Map<string, Node>): num
 
     if (maxSim > 0.5) {
       const suppressedActivation = candidate.activation * 0.3;
-      updateNode(candidate.id, { activation: suppressedActivation });
-      activatedNodes.delete(candidate.id);
+      setSessionActivationValue(candidate.node_id, sessionId, suppressedActivation);
+      activatedNodes.delete(candidate.node_id);
       suppressed++;
     }
   }
@@ -1009,7 +1166,7 @@ function applyRetrievalInducedForgetting(activatedNodes: Map<string, Node>): num
 
 // ── 25.3: Anti-Hijack — Dominanz-Erkennung ──────────────────
 
-function applyAntiHijack(activatedNodes: Map<string, Node>): number {
+function applyAntiHijack(activatedNodes: Map<string, Node>, sessionId: string): number {
   if (activatedNodes.size < 5) return 0;
 
   const db = getDb();
@@ -1025,9 +1182,8 @@ function applyAntiHijack(activatedNodes: Map<string, Node>): number {
       const ceiling = avgAct * 2;
       const dampFactor = Math.min(1.0, ceiling / node.activation_count);
       const cappedActivation = node.activation * dampFactor;
-      updateNode(id, { activation: cappedActivation });
-      const refreshed = getNode(id);
-      if (refreshed) activatedNodes.set(id, refreshed);
+      setSessionActivationValue(id, sessionId, cappedActivation);
+      syncActivatedNode(activatedNodes, id, sessionId);
       capped++;
     }
   }
@@ -1036,7 +1192,7 @@ function applyAntiHijack(activatedNodes: Map<string, Node>): number {
 
 // ── 25.5: Divisive Normalization — Kanonische Gain Control ──
 
-function applyDivisiveNormalization(activatedNodes: Map<string, Node>): void {
+function applyDivisiveNormalization(activatedNodes: Map<string, Node>, sessionId: string): void {
   if (activatedNodes.size < 3) return;
 
   const BASELINE = 0.1;
@@ -1049,9 +1205,8 @@ function applyDivisiveNormalization(activatedNodes: Map<string, Node>): void {
     const normalized = node.activation / (BASELINE + totalActivation);
     const scaled = normalized * activatedNodes.size;
     const final = Math.min(1.0, Math.max(0, scaled));
-    updateNode(id, { activation: final });
-    const refreshed = getNode(id);
-    if (refreshed) activatedNodes.set(id, refreshed);
+    setSessionActivationValue(id, sessionId, final);
+    syncActivatedNode(activatedNodes, id, sessionId);
   }
 }
 
@@ -1114,22 +1269,22 @@ export function activateByConversation(
   }
 
   applyInhibitionOfReturn(allActivated, sessionId);
-  patternComplete(allActivated);
+  patternComplete(allActivated, sessionId);
 
   // 12.2: Engram Completion — bewiesene Muster staerker als Chunk-Completion
-  completeEngrams(allActivated);
+  completeEngramsSessionAware(allActivated, sessionId);
 
   // 12.2: Aktivierungsmuster aufzeichnen fuer zukuenftige Engram-Erkennung
   recordActivationPattern(Array.from(allActivated.keys()).slice(0, 15));
 
   // 25.3: Anti-Hijack — Nodes die alles dominieren werden gecapped
-  applyAntiHijack(allActivated);
+  applyAntiHijack(allActivated, sessionId);
 
   // 25.5: Divisive Normalization — kanonische Gain Control
-  applyDivisiveNormalization(allActivated);
+  applyDivisiveNormalization(allActivated, sessionId);
 
   // 22.1: Retrieval-Induced Forgetting — aehnliche aber nicht-Top Nodes unterdruecken
-  applyRetrievalInducedForgetting(allActivated);
+  applyRetrievalInducedForgetting(allActivated, sessionId);
 
   // 15.3b: Orienting modulates activation budget (focused → fewer, broad → more)
   let orientingBudget = ACTIVATION_BUDGET;
@@ -1171,7 +1326,15 @@ export function setLastSTDPEntities(sessionId: string, entityIds: string[]): voi
   } catch { /* system_state may not exist yet */ }
 }
 
-export function getCurrentlyActivatedEntityIds(limit = 10): string[] {
+export function getCurrentlyActivatedEntityIds(limit = 10, sessionId?: string): string[] {
+  if (sessionId) {
+    const fetchLimit = Math.max(limit * 4, limit);
+    const nodes = getSessionActivationRows(sessionId, fetchLimit, 0.1)
+      .map(materializeSessionActivationRow)
+      .filter((node): node is Node => node !== null && node.type === 'entity');
+    return finalizeActivatedNodeSelection(nodes, limit).map(node => node.id);
+  }
+
   const db = getDb();
   return (db.prepare(
     "SELECT id FROM nodes WHERE type = 'entity' AND activation > 0.1 ORDER BY activation DESC LIMIT ?"

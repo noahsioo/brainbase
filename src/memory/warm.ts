@@ -1,9 +1,9 @@
 import { searchNodes, type Node } from './store.js';
 import { activateByQuery, getActivatedNodes } from './activation.js';
 
-export function getWarmMemories(topic: string, limit = 10): Node[] {
-  activateByQuery(topic);
-  const activated = getActivatedNodes(limit);
+export function getWarmMemories(topic: string, limit = 10, sessionId?: string): Node[] {
+  activateByQuery(topic, 1.0, sessionId);
+  const activated = getActivatedNodes(limit, sessionId);
   if (activated.length > 0) return activated;
   return searchNodes(topic, limit);
 }
@@ -21,7 +21,7 @@ export function buildWarmMemoryBlock(topic: string, nodes: Node[]): string {
   return block;
 }
 
-export function getWarmMemoryForTopic(topic: string): string {
-  const nodes = getWarmMemories(topic);
+export function getWarmMemoryForTopic(topic: string, sessionId?: string): string {
+  const nodes = getWarmMemories(topic, 10, sessionId);
   return buildWarmMemoryBlock(topic, nodes);
 }

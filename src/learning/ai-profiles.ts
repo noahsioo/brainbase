@@ -70,6 +70,30 @@ export function getProviderProfile(provider: string): ProviderProfile {
   return profile;
 }
 
+export function peekProviderProfile(provider: string): ProviderProfile {
+  const db = getDb();
+
+  try {
+    const row = db.prepare('SELECT * FROM ai_profiles WHERE provider = ?')
+      .get(provider) as ProviderProfile | undefined;
+    if (row) return row;
+  } catch {
+    // Table may not exist yet on a fresh DB. Fall back to defaults without creating anything.
+  }
+
+  const defaults = DEFAULT_PROFILES[provider] || {};
+  return {
+    provider,
+    context_style: defaults.context_style || 'narrative',
+    budget_multiplier: defaults.budget_multiplier || 1.0,
+    max_chunks: defaults.max_chunks || 7,
+    positive_count: 0,
+    negative_count: 0,
+    total_contexts: 0,
+    last_used: 0,
+  };
+}
+
 export function recordContextDelivery(provider: string): void {
   ensureProfileTable();
   const db = getDb();

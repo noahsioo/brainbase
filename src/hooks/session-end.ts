@@ -4,9 +4,11 @@ import { getConfig } from '../config.js';
 import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { extractFromPrompt } from '../extraction/code-extractor.js';
 import { calculateSignalStrength, GATE_HEBBIAN } from '../signal/signal-strength.js';
-import { activateByQuery } from '../memory/activation.js';
+import { activateByQuery, clearSessionActivationOverlay } from '../memory/activation.js';
 import { extractEntities, updateCounters, checkAutoNodeCreation } from '../signal/counters.js';
 import { clearScope } from '../memory/session-scope.js';
+import { deleteWorkingMemory, finalizeWorkingMemory } from '../memory/working-memory.js';
+import { clearSessionRuntimeState } from '../memory/session-runtime-state.js';
 
 
 interface SessionEndInput {
@@ -18,6 +20,8 @@ const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 
 export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
   try {
+    const sessionId = input.session_id;
+
     if (input.session_id) {
       const db = getDb();
       const row = db.prepare(
@@ -28,9 +32,8 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
         'UPDATE sessions SET message_count = ? WHERE id = ?',
       ).run(row.count, input.session_id);
 
+      finalizeWorkingMemory(input.session_id);
       endSession(input.session_id);
-      clearScope(input.session_id);
-      cleanupSessionState(input.session_id);
     }
 
     const config = getConfig();
@@ -59,6 +62,14 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
         }, 100);
       }
     }
+
+    if (sessionId) {
+      deleteWorkingMemory(sessionId);
+      clearSessionActivationOverlay(sessionId);
+      clearSessionRuntimeState(sessionId);
+      clearScope(sessionId);
+      cleanupSessionState(sessionId);
+    }
   } catch {
     // Silent fail - session end should never break anything
   }
@@ -80,7 +91,7 @@ function parseTranscriptLocally(sessionId: string): void {
       extractFromPrompt(msg.content, sessionId, signal.flags);
 
       if (signal.score >= GATE_HEBBIAN) {
-        activateByQuery(msg.content);
+        activateByQuery(msg.content, 1.0, sessionId);
       }
 
       const entities = extractEntities(msg.content);
@@ -119,11 +130,16 @@ function cleanupSessionState(sessionId: string): void {
       `encoding_signal_${sessionId}`,
       `session_focus_${sessionId}`,
       `prev_topic_${sessionId}`,
+      `semantic_extraction_status_${sessionId}`,
+      `semantic_extraction_source_${sessionId}`,
       `stdp_entities_${sessionId}`,
       `pending_impulses_${sessionId}`,
       `energy_budget_${sessionId}`,
       `last_boundary_${sessionId}`,
       `ior_nodes_${sessionId}`,
+      `last_context_node_ids_${sessionId}`,
+      `context_prediction_${sessionId}`,
+      `context_feedback_scores_${sessionId}`,
     ];
     for (const key of keys) {
       db.prepare("DELETE FROM system_state WHERE key = ?").run(key);

@@ -23,6 +23,18 @@ interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
+function parseMemoryResourceUri(uri: string): { baseUri: string; sessionId?: string } {
+  try {
+    const parsed = new URL(uri);
+    return {
+      baseUri: `${parsed.protocol}//${parsed.host}${parsed.pathname}`,
+      sessionId: parsed.searchParams.get('session_id') || undefined,
+    };
+  } catch {
+    return { baseUri: uri };
+  }
+}
+
 function send(response: JsonRpcResponse): void {
   const json = JSON.stringify(response);
   process.stdout.write(json + '\n');
@@ -102,15 +114,16 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
 
     case 'resources/read': {
       const uri = (req.params?.uri as string) || '';
+      const { baseUri, sessionId } = parseMemoryResourceUri(uri);
       let resourceContent = '';
 
-      if (uri === 'memory://brain/context') {
+      if (baseUri === 'memory://brain/context') {
         try {
-          resourceContent = generateContext('STANDARD');
+          resourceContent = generateContext('STANDARD', undefined, undefined, undefined, undefined, undefined, undefined, sessionId, true);
         } catch {
           resourceContent = 'Brain context not available yet. Start a conversation to build memory.';
         }
-      } else if (uri === 'memory://brain/identity') {
+      } else if (baseUri === 'memory://brain/identity') {
         try {
           const db = getDb();
           const identityNodes = db.prepare(
@@ -160,8 +173,10 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
 
     case 'prompts/get': {
       let briefingContent = '';
+      const promptArgs = (req.params?.arguments || {}) as Record<string, unknown>;
+      const sessionId = promptArgs.session_id as string | undefined;
       try {
-        briefingContent = generateContext('MAXIMUM');
+        briefingContent = generateContext('MAXIMUM', undefined, undefined, undefined, undefined, undefined, undefined, sessionId, true);
       } catch {
         briefingContent = 'Brain not initialized yet. Use memory_process_message to start building memory.';
       }

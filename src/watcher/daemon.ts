@@ -9,7 +9,12 @@ import { runIdleTick, runDmnIdlePass } from './idle-brain.js';
 import { createSession, endSession } from '../memory/store.js';
 import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { PriorityQueue } from './queue.js';
-import { dispatchUserPrompt, dispatchSessionEnd, resetDispatcherState } from './dispatcher.js';
+import {
+  dispatchUserPrompt,
+  dispatchSessionEnd,
+  resetDispatcherState,
+  type DispatchUserPromptResult,
+} from './dispatcher.js';
 import type { KeywordFlags } from '../signal/keywords.js';
 
 const PORT = 7899;
@@ -62,7 +67,7 @@ async function handleEvent(event: string, data: Record<string, unknown>): Promis
       const recentMessages = data._recentMessages as string | undefined;
 
       messagesProcessed++;
-      const result = await dispatchUserPrompt(
+      const result: DispatchUserPromptResult = await dispatchUserPrompt(
         client, queue, prompt, sessionId, signalFlags, recentMessages,
       );
 
@@ -70,7 +75,13 @@ async function handleEvent(event: string, data: Record<string, unknown>): Promis
         lastExtractionAt = new Date().toISOString();
       }
 
-      return result;
+      return {
+        ok: result.ok,
+        ...(result.systemMessage ? { systemMessage: result.systemMessage } : {}),
+        ...(typeof result.frustrated === 'boolean' ? { frustrated: result.frustrated } : {}),
+        ...(typeof result.blocked === 'boolean' ? { blocked: result.blocked } : {}),
+        ...(result.semantic !== undefined ? { semantic: result.semantic } : {}),
+      };
     }
 
     case 'session-end': {

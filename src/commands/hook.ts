@@ -72,7 +72,9 @@ export const hookCommand = new Command('hook')
         break;
       }
       case 'pre-compact':
-        await handlePreCompact();
+        await handlePreCompact({
+          session_id: (input.session_id || input.sessionId) as string | undefined,
+        });
         break;
       default:
         process.stderr.write(`Unknown hook event: ${event}\n`);

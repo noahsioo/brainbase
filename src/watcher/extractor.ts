@@ -2,7 +2,7 @@ import type { LLMClient } from '../llm/types.js';
 import { addNode, getNode, updateNode, searchNodes, getDb, getOrCreateEntity, findEntityByName, getEdgeBetween, addEdge, strengthenEdge, getAllEntities, incrementEvidence, type Node, type NodeMetadata } from '../memory/store.js';
 import { autoLinkNodes } from '../memory/activation.js';
 import type { KeywordFlags } from '../signal/keywords.js';
-import { verifyExtraction, verifyEntity, verifyRelation, isGarbage, type ExtractionResponse, type ExtractedEntity, type ExtractedRelation } from '../extraction/verification.js';
+import { verifyExtraction, verifyEntity, verifyRelation, isGarbage, type ExtractionResponse, type ExtractedEntity, type ExtractedFact, type ExtractedRelation, type ExtractedTopic, type SemanticIntent } from '../extraction/verification.js';
 import { analyzeStyleForCategory } from '../learning/style-analyzer.js';
 import { queueEmbedding } from '../llm/embeddings.js';
 import { recordCreation, recordGarbage, recordEvidence } from '../learning/self-tuner.js';
@@ -11,6 +11,34 @@ import { recordLLMCall } from '../regulation/energy.js';
 import { generateContext } from '../memory/context-generator.js';
 
 const CONFIDENCE_CAP = 0.8;
+const INVALID_TOPIC_NAMES = new Set([
+  'conversation', 'session', 'message', 'request', 'topic', 'thema',
+  'project', 'projekt', 'task', 'aufgabe', 'general', 'allgemein',
+]);
+const VALID_INTENTS: ReadonlySet<SemanticIntent> = new Set([
+  'question',
+  'statement',
+  'request',
+  'feedback',
+  'greeting',
+  'other',
+]);
+
+export interface WatcherSemanticPayload {
+  nothing_new: boolean;
+  entities: ExtractedEntity[];
+  relations: ExtractedRelation[];
+  topic: string;
+  topic_confidence: number;
+  intent: SemanticIntent;
+  facts: ExtractedFact[];
+  references: string[];
+}
+
+export interface MessageExtractionResult {
+  nodes: Node[];
+  semantic: WatcherSemanticPayload | null;
+}
 
 // M36+M38+M39+M40: Read encoding signal from system_state
 interface EncodingSignal {
@@ -176,7 +204,7 @@ Respond with this exact JSON:
 {
   "nothing_new": true or false,
   "entities": [
-    { "name": "EntityName", "type": "person|technology|project|concept|tool|food|place|organization|skill|language|framework|library" }
+    { "name": "EntityName", "type": "person|technology|project|concept|tool|food|place|organization|skill|language|framework|library", "confidence": 0.3-0.8 }
   ],
   "relations": [
     { "from": "EntityA", "to": "EntityB", "type": "uses|likes|dislikes|builds|knows|part_of|works_with|prefers|wants|is_a|located_at|has_skill|related_to", "confidence": 0.3-0.8 }
@@ -184,13 +212,23 @@ Respond with this exact JSON:
   "new_facts": [
     { "content": "...", "type": "preference|fact|decision|task|project|learning|identity|insight|example", "confidence": 0.3-0.8, "metadata": { "category": "optional" } }
   ],
+  "topic": { "name": "short concrete topic", "confidence": 0.0-1.0 },
+  "intent": "question|statement|request|feedback|greeting|other",
+  "references": ["pronoun or callback target from the latest message if relevant"],
   "updates": [
     { "existing_content": "exact content to update", "new_content": "updated content", "reason": "what changed" }
   ],
   "emotion": { "type": "neutral|frustrated|excited|curious", "intensity": 0.0-1.0 }
 }
 
-If nothing_new is true, ALL arrays MUST be empty.
+RULES FOR topic / intent / references:
+- topic must be a SHORT concrete noun phrase, not a sentence
+- topic must NOT be vague meta like "conversation", "project", "request", "message"
+- intent is for the LATEST user message only
+- references should contain unresolved callbacks like "das", "it", "that bug", otherwise []
+
+If nothing_new is true, entities/relations/new_facts/updates MUST be empty.
+topic and intent may still be set if clear. references may still be set if useful.
 Prefer entities+relations over facts. Facts are for complex info only.`;
 }
 
@@ -212,12 +250,12 @@ function getRecentMessages(sessionId: string, limit: number = 10): string {
   }
 }
 
-export async function extractFromMessage(
+export async function extractFromMessageDetailed(
   client: LLMClient,
   message: string,
   sessionId: string,
   flags?: KeywordFlags,
-): Promise<Node[]> {
+): Promise<MessageExtractionResult> {
   const existingNodes = searchNodes(message, 15);
 
   const systemPrompt = buildSystemPrompt(flags?.frustration ?? false);
@@ -244,13 +282,15 @@ export async function extractFromMessage(
     });
   } catch (err) {
     console.error('[Extractor] LLM extraction failed:', err);
-    return [];
+    return { nodes: [], semantic: null };
   }
 
   if (!response || typeof response.nothing_new !== 'boolean') {
     console.error('[Extractor] Invalid response format');
-    return [];
+    return { nodes: [], semantic: null };
   }
+
+  const semantic = buildWatcherSemanticPayload(response);
 
   // Handle updates to existing nodes
   if (Array.isArray(response.updates)) {
@@ -362,7 +402,7 @@ export async function extractFromMessage(
 
   // ── Process Facts (legacy + complex info) ─────────────────
   if (response.nothing_new && (!response.entities || response.entities.length === 0)) {
-    return createdNodes;
+    return { nodes: createdNodes, semantic };
   }
 
   // M36+M38+M39+M40: Read encoding signal for importance modifiers + encoding context
@@ -506,7 +546,17 @@ export async function extractFromMessage(
   // 24.4: Energie-Management — LLM-Call tracken
   recordLLMCall(sessionId, createdNodes.length);
 
-  return createdNodes;
+  return { nodes: createdNodes, semantic };
+}
+
+export async function extractFromMessage(
+  client: LLMClient,
+  message: string,
+  sessionId: string,
+  flags?: KeywordFlags,
+): Promise<Node[]> {
+  const result = await extractFromMessageDetailed(client, message, sessionId, flags);
+  return result.nodes;
 }
 
 function truncateConversation(text: string, maxChars = 8000): string {
@@ -551,6 +601,123 @@ export async function extractFromTranscript(
   const sid = sessionId || `transcript-${Date.now()}`;
 
   return extractFromMessage(client, truncated, sid);
+}
+
+export function buildWatcherSemanticPayload(response: ExtractionResponse): WatcherSemanticPayload {
+  const normalizedTopic = normalizeTopic(response.topic);
+
+  return {
+    nothing_new: Boolean(response.nothing_new),
+    entities: normalizeSemanticEntities(response.entities),
+    relations: normalizeSemanticRelations(response.relations),
+    topic: normalizedTopic.name,
+    topic_confidence: normalizedTopic.confidence,
+    intent: normalizeIntent(response.intent),
+    facts: normalizeSemanticFacts(response.new_facts),
+    references: normalizeReferences(response.references),
+  };
+}
+
+function normalizeSemanticEntities(entities: ExtractedEntity[] | undefined): ExtractedEntity[] {
+  if (!Array.isArray(entities)) return [];
+
+  return entities
+    .map(entity => verifyEntity(entity))
+    .filter((entity): entity is ExtractedEntity => entity !== null)
+    .slice(0, 5)
+    .map(entity => ({
+      ...entity,
+      confidence: normalizeSemanticConfidence(entity.confidence),
+    }));
+}
+
+function normalizeSemanticRelations(relations: ExtractedRelation[] | undefined): ExtractedRelation[] {
+  if (!Array.isArray(relations)) return [];
+
+  return relations
+    .map(relation => {
+      const from = normalizeText(relation.from);
+      const to = normalizeText(relation.to);
+      const type = normalizeText(relation.type);
+      if (!from || !to || !type || from.toLowerCase() === to.toLowerCase()) {
+        return null;
+      }
+      return {
+        from,
+        to,
+        type,
+        confidence: normalizeSemanticConfidence(relation.confidence),
+      };
+    })
+    .filter((relation): relation is ExtractedRelation => relation !== null)
+    .slice(0, 8);
+}
+
+function normalizeSemanticFacts(facts: ExtractedFact[] | undefined): ExtractedFact[] {
+  if (!Array.isArray(facts)) return [];
+
+  return facts
+    .map(fact => {
+      const content = normalizeText(fact.content);
+      const type = normalizeText(fact.type);
+      if (!content || !type) return null;
+      return {
+        ...fact,
+        content,
+        type: type as ExtractedFact['type'],
+        confidence: normalizeSemanticConfidence(fact.confidence),
+      };
+    })
+    .filter((fact): fact is ExtractedFact => fact !== null)
+    .slice(0, 8);
+}
+
+function normalizeTopic(topic: ExtractedTopic | undefined): ExtractedTopic {
+  const name = normalizeText(topic?.name).toLowerCase();
+  if (!name || INVALID_TOPIC_NAMES.has(name)) {
+    return { name: '', confidence: 0 };
+  }
+
+  return {
+    name,
+    confidence: normalizeTopicConfidence(topic?.confidence),
+  };
+}
+
+function normalizeIntent(intent: SemanticIntent | undefined): SemanticIntent {
+  const normalized = normalizeText(intent).toLowerCase() as SemanticIntent;
+  return VALID_INTENTS.has(normalized) ? normalized : 'other';
+}
+
+function normalizeReferences(references: string[] | undefined): string[] {
+  if (!Array.isArray(references)) return [];
+
+  const unique: string[] = [];
+  for (const reference of references) {
+    const normalized = normalizeText(reference);
+    if (!normalized) continue;
+    if (unique.some(existing => existing.toLowerCase() === normalized.toLowerCase())) continue;
+    unique.push(normalized);
+    if (unique.length >= 5) break;
+  }
+
+  return unique;
+}
+
+function normalizeSemanticConfidence(value: number | undefined): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0.5;
+  return Math.max(0.3, Math.min(0.8, numeric));
+}
+
+function normalizeTopicConfidence(value: number | undefined): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function normalizeText(value: string | undefined): string {
+  return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
 const EPISODE_SYSTEM_PROMPT = `You are writing a diary entry for an AI memory system.

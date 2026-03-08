@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { searchNodes, addNode, getStats, getDb, createSession, type Node } from '../memory/store.js';
 import { activateByQuery, getActivatedNodes, autoLinkNodes } from '../memory/activation.js';
 import { processMessage } from '../hooks/user-prompt.js';
@@ -37,6 +38,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'number',
           description: 'Max results to return (default: 10)',
         },
+        session_id: {
+          type: 'string',
+          description: 'Optional session identifier for session-scoped search activation',
+        },
       },
       required: ['query'],
     },
@@ -62,6 +67,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         provider: {
           type: 'string',
           description: 'Provider name (e.g. cursor, claude-desktop) for format optimization',
+        },
+        session_id: {
+          type: 'string',
+          description: 'Optional session identifier for session-scoped context and activation',
         },
       },
     },
@@ -118,6 +127,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         limit: {
           type: 'number',
           description: 'Max results (default: 10)',
+        },
+        session_id: {
+          type: 'string',
+          description: 'Optional session identifier for session-scoped related-memory retrieval',
         },
       },
       required: ['query'],
@@ -180,6 +193,57 @@ function formatNode(node: Node): string {
   return `${imp}[${node.type}] ${node.content} (${ageLabel}, importance: ${node.importance.toFixed(1)})`;
 }
 
+function ensureOpenSession(sessionId: string, provider = 'mcp'): void {
+  const db = getDb();
+  const existing = db.prepare('SELECT id FROM sessions WHERE id = ? AND ended_at IS NULL').get(sessionId);
+  if (!existing) {
+    createSession(provider, sessionId);
+  }
+}
+
+function preparePersistentSession(requestedSessionId?: string, provider = 'mcp'): {
+  sessionId: string;
+  generated: boolean;
+} {
+  if (requestedSessionId) {
+    ensureOpenSession(requestedSessionId, provider);
+    return {
+      sessionId: requestedSessionId,
+      generated: false,
+    };
+  }
+
+  const generatedSessionId = `mcp-${randomUUID()}`;
+  ensureOpenSession(generatedSessionId, provider);
+  return {
+    sessionId: generatedSessionId,
+    generated: true,
+  };
+}
+
+function prepareEphemeralScope(
+  requestedSessionId?: string,
+  prefix = 'mcp-read',
+): { sessionId: string; cleanup: () => void } {
+  if (requestedSessionId) {
+    ensureOpenSession(requestedSessionId, 'mcp');
+    return {
+      sessionId: requestedSessionId,
+      cleanup: () => {},
+    };
+  }
+
+  const ephemeralSessionId = `${prefix}-${randomUUID()}`;
+  ensureOpenSession(ephemeralSessionId, 'mcp');
+  return {
+    sessionId: ephemeralSessionId,
+    cleanup: () => {
+      const db = getDb();
+      db.prepare('DELETE FROM sessions WHERE id = ?').run(ephemeralSessionId);
+    },
+  };
+}
+
 export async function handleToolCall(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   if (isPaused()) {
     return { content: [{ type: 'text', text: 'Memory system is paused. Use the dashboard or CLI to resume.' }] };
@@ -212,39 +276,42 @@ export async function handleToolCall(name: string, args: Record<string, unknown>
 function handleSearch(args: Record<string, unknown>): ToolResult {
   const query = args.query as string;
   const limit = (args.limit as number) || 10;
+  const requestedSessionId = args.session_id as string | undefined;
 
   const directHits = searchNodes(query, limit);
-  const activation = activateByQuery(query, 0.5, 'mcp-default');
+  const { sessionId, cleanup } = prepareEphemeralScope(requestedSessionId, 'mcp-search');
 
-  const seen = new Set(directHits.map(n => n.id));
-  const combined = [...directHits];
-  for (const node of activation.activated) {
-    if (!seen.has(node.id)) {
-      combined.push(node);
-      seen.add(node.id);
+  try {
+    const activation = activateByQuery(query, 0.5, sessionId);
+    const activated = getActivatedNodes(limit, sessionId);
+
+    const seen = new Set(directHits.map(n => n.id));
+    const combined = [...directHits];
+    for (const node of [...activation.activated, ...activated]) {
+      if (!seen.has(node.id)) {
+        combined.push(node);
+        seen.add(node.id);
+      }
+      if (combined.length >= limit) break;
     }
-    if (combined.length >= limit) break;
-  }
 
-  if (combined.length === 0) {
-    return { content: [{ type: 'text', text: `No memories found for "${query}".` }] };
-  }
+    if (combined.length === 0) {
+      return { content: [{ type: 'text', text: `No memories found for "${query}".` }] };
+    }
 
-  const lines = combined.slice(0, limit).map(formatNode);
-  const text = `Found ${combined.length} memories for "${query}":\n\n${lines.join('\n')}`;
-  return { content: [{ type: 'text', text }] };
+    const lines = combined.slice(0, limit).map(formatNode);
+    const text = `Found ${combined.length} memories for "${query}":\n\n${lines.join('\n')}`;
+    return { content: [{ type: 'text', text }] };
+  } finally {
+    cleanup();
+  }
 }
 
 async function handleContext(args: Record<string, unknown>): Promise<ToolResult> {
   const topic = args.topic as string | undefined;
   const provider = (args.provider as string) || 'mcp';
-  const sessionId = (args.session_id as string) || `mcp-${Date.now()}`;
-
-  const db = getDb();
-  const existing = db.prepare('SELECT id FROM sessions WHERE id = ? AND ended_at IS NULL').get(sessionId);
-  if (!existing) {
-    createSession(provider, sessionId);
-  }
+  const requestedSessionId = args.session_id as string | undefined;
+  const { sessionId, generated } = preparePersistentSession(requestedSessionId, provider);
 
   const result = await processMessage({
     message: topic || 'context request',
@@ -253,7 +320,8 @@ async function handleContext(args: Record<string, unknown>): Promise<ToolResult>
     context_only: true,
   });
 
-  return { content: [{ type: 'text', text: result.context || 'No context available.' }] };
+  const sessionHint = generated ? `Session ID: ${sessionId}\n\n` : '';
+  return { content: [{ type: 'text', text: `${sessionHint}${result.context || 'No context available.'}` }] };
 }
 
 function handleAdd(args: Record<string, unknown>): ToolResult {
@@ -292,17 +360,23 @@ function handleStatus(): ToolResult {
 function handleRelated(args: Record<string, unknown>): ToolResult {
   const query = args.query as string;
   const limit = (args.limit as number) || 10;
+  const requestedSessionId = args.session_id as string | undefined;
+  const { sessionId, cleanup } = prepareEphemeralScope(requestedSessionId, 'mcp-related');
 
-  activateByQuery(query, 0.8, 'mcp-default');
-  const activated = getActivatedNodes(limit);
+  try {
+    activateByQuery(query, 0.8, sessionId);
+    const activated = getActivatedNodes(limit, sessionId);
 
-  if (activated.length === 0) {
-    return { content: [{ type: 'text', text: `No related memories found for "${query}".` }] };
+    if (activated.length === 0) {
+      return { content: [{ type: 'text', text: `No related memories found for "${query}".` }] };
+    }
+
+    const lines = activated.map(formatNode);
+    const text = `${activated.length} related memories for "${query}" (via spreading activation):\n\n${lines.join('\n')}`;
+    return { content: [{ type: 'text', text }] };
+  } finally {
+    cleanup();
   }
-
-  const lines = activated.map(formatNode);
-  const text = `${activated.length} related memories for "${query}" (via spreading activation):\n\n${lines.join('\n')}`;
-  return { content: [{ type: 'text', text }] };
 }
 
 function handleRemind(args: Record<string, unknown>): ToolResult {
@@ -327,7 +401,8 @@ async function handleProcessMessage(args: Record<string, unknown>): Promise<Tool
   }
 
   const provider = (args.provider as string) || 'mcp';
-  const sessionId = (args.session_id as string) || undefined;
+  const requestedSessionId = args.session_id as string | undefined;
+  const { sessionId, generated } = preparePersistentSession(requestedSessionId, provider);
 
   const result = await processMessage({
     message,
@@ -335,10 +410,16 @@ async function handleProcessMessage(args: Record<string, unknown>): Promise<Tool
     session_id: sessionId,
   });
 
+  const sessionHint = generated ? `Session ID: ${sessionId}\n\n` : '';
   if (result.context) {
-    const text = `[Signal: ${result.signal_score.toFixed(2)} / ${result.signal_action}]\n\n${result.context}`;
+    const text = `${sessionHint}[Signal: ${result.signal_score.toFixed(2)} / ${result.signal_action}]\n\n${result.context}`;
     return { content: [{ type: 'text', text }] };
   }
 
-  return { content: [{ type: 'text', text: `Message processed. Signal: ${result.signal_score.toFixed(2)} / ${result.signal_action}. No relevant context yet.` }] };
+  return {
+    content: [{
+      type: 'text',
+      text: `${sessionHint}Message processed. Signal: ${result.signal_score.toFixed(2)} / ${result.signal_action}. No relevant context yet.`,
+    }],
+  };
 }

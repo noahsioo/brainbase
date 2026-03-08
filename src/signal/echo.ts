@@ -7,6 +7,12 @@ import { trackFailure } from '../memory/prospective.js';
 export type FeedbackSignal = 'positive' | 'negative' | 'neutral';
 export type Mood = 'neutral' | 'frustrated' | 'excited' | 'focused';
 
+interface SessionContextFeedbackEntry {
+  positive: number;
+  negative: number;
+  updated_at: number;
+}
+
 const POSITIVE_KEYWORDS = [
   'danke', 'geil', 'perfekt', 'super', 'genau', 'thanks', 'perfect',
   'great', 'exactly', 'nice', 'awesome', 'toll', 'klasse', 'top',
@@ -95,6 +101,62 @@ export function applyFeedbackToRecentNodes(signal: FeedbackSignal): number {
   return affected;
 }
 
+function getLastContextNodeIds(sessionId?: string): string[] {
+  const db = getDb();
+  const keys = sessionId
+    ? [`last_context_node_ids_${sessionId}`, 'last_context_node_ids']
+    : ['last_context_node_ids'];
+
+  for (const key of keys) {
+    try {
+      const row = db.prepare('SELECT value FROM system_state WHERE key = ?')
+        .get(key) as { value: string } | undefined;
+      if (!row) continue;
+
+      const parsed = JSON.parse(row.value);
+      if (!Array.isArray(parsed)) continue;
+
+      const nodeIds = parsed.filter((id): id is string => typeof id === 'string' && id.length > 0);
+      if (nodeIds.length > 0) return nodeIds;
+    } catch {
+      continue;
+    }
+  }
+
+  return [];
+}
+
+function getSessionContextFeedbackKey(sessionId: string): string {
+  return `context_feedback_scores_${sessionId}`;
+}
+
+function getSessionContextFeedback(sessionId: string): Record<string, SessionContextFeedbackEntry> {
+  const raw = getSystemState(getSessionContextFeedbackKey(sessionId));
+  if (!raw) return {};
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, SessionContextFeedbackEntry>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) =>
+        value &&
+        typeof value.positive === 'number' &&
+        typeof value.negative === 'number' &&
+        typeof value.updated_at === 'number',
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function saveSessionContextFeedback(sessionId: string, feedback: Record<string, SessionContextFeedbackEntry>): void {
+  const trimmed = Object.entries(feedback)
+    .sort((a, b) => b[1].updated_at - a[1].updated_at)
+    .slice(0, 64);
+
+  setSystemState(getSessionContextFeedbackKey(sessionId), JSON.stringify(Object.fromEntries(trimmed)));
+}
+
 // 14.3: Provider-specific feedback tracking
 export function trackProviderFeedback(signal: FeedbackSignal, provider: string): void {
   if (signal === 'neutral') return;
@@ -160,17 +222,17 @@ export function applySomaticMarkers(signal: FeedbackSignal): void {
 }
 
 // 11.5: Cerebellum — feedback on nodes that were in the generated context
-export function applyContextFeedback(signal: FeedbackSignal): void {
+export function applyContextFeedback(signal: FeedbackSignal, sessionId?: string): void {
   if (signal === 'neutral') return;
 
   const db = getDb();
   try {
-    const row = db.prepare("SELECT value FROM system_state WHERE key = 'last_context_node_ids'")
-      .get() as { value: string } | undefined;
-    if (!row) return;
+    const nodeIds = getLastContextNodeIds(sessionId);
+    if (nodeIds.length === 0) return;
 
-    const nodeIds: string[] = JSON.parse(row.value);
     const delta = signal === 'positive' ? 0.03 : -0.05;
+    const sessionFeedback = sessionId ? getSessionContextFeedback(sessionId) : null;
+    const now = Date.now();
 
     for (const id of nodeIds.slice(0, 20)) {
       const node = getNode(id);
@@ -187,6 +249,21 @@ export function applyContextFeedback(signal: FeedbackSignal): void {
       }
 
       updateNode(id, { importance: newImportance, metadata: JSON.stringify(meta) });
+
+      if (sessionFeedback) {
+        const current = sessionFeedback[id] || { positive: 0, negative: 0, updated_at: now };
+        if (signal === 'positive') {
+          current.positive += 1;
+        } else {
+          current.negative += 1;
+        }
+        current.updated_at = now;
+        sessionFeedback[id] = current;
+      }
+    }
+
+    if (sessionId && sessionFeedback) {
+      saveSessionContextFeedback(sessionId, sessionFeedback);
     }
   } catch { /* non-fatal */ }
 }

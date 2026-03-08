@@ -13,7 +13,7 @@ import { isCriticalPeriod, getDevelopmentPhase } from '../memory/cold-start.js';
 import { type SignalAction, GATE_IGNORE, GATE_LLM } from './signal-strength.js';
 import { getTradeoffState } from '../regulation/tradeoffs.js';
 import { analyzeCode, type CodeSignal } from '../senses/code-sense.js';
-import { getSystemHealth, type SystemHealth } from '../senses/interoception.js';
+import { getSystemHealth, measureSystemHealth, type SystemHealth } from '../senses/interoception.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -50,7 +50,24 @@ export interface ThalamicSignal {
 let sessionEntityCounts = new Map<string, number>();
 let currentSessionId = '';
 
-function getSensoryGating(entities: string[], sessionId: string): Record<string, number> {
+function getSensoryGating(
+  entities: string[],
+  sessionId: string,
+  readOnly = false,
+): Record<string, number> {
+  if (readOnly) {
+    if (sessionId !== currentSessionId) return {};
+
+    const dampening: Record<string, number> = {};
+    for (const entity of entities) {
+      const count = sessionEntityCounts.get(entity) || 0;
+      if (count > 2) {
+        dampening[entity] = Math.max(0.3, 1.0 - (count - 2) * 0.15);
+      }
+    }
+    return dampening;
+  }
+
   if (sessionId !== currentSessionId) {
     sessionEntityCounts.clear();
     currentSessionId = sessionId;
@@ -307,21 +324,28 @@ function detectTaskMode(text: string, flags: KeywordFlags): TaskMode {
 
 // ── Main Function ───────────────────────────────────────────
 
-export function processThalamic(text: string, sessionId: string): ThalamicSignal {
+export function processThalamic(
+  text: string,
+  sessionId: string,
+  opts?: { readOnly?: boolean },
+): ThalamicSignal {
+  const readOnly = opts?.readOnly === true;
   const flags = detectKeywordFlags(text);
   const entities = extractEntities(text);
 
-  const updatedCounters = updateCounters(entities, sessionId);
-  checkAutoNodeCreation(updatedCounters);
+  if (!readOnly) {
+    const updatedCounters = updateCounters(entities, sessionId);
+    checkAutoNodeCreation(updatedCounters);
 
-  // M5: Update adaptive thresholds for seen/unseen entities
-  updateAdaptiveThresholds(entities, sessionId);
+    // M5: Update adaptive thresholds for seen/unseen entities
+    updateAdaptiveThresholds(entities, sessionId);
+  }
 
   // 10.1: Code-Sense — Vorverarbeitung wie Retina
   const codeSense = analyzeCode(text);
 
   // 10.4: Interoception — System fuehlt sich selbst
-  const systemHealth = getSystemHealth();
+  const systemHealth = readOnly ? measureSystemHealth() : getSystemHealth();
 
   // 4 Nuclei
   let entityRaw = scoreEntityNucleus(text, entities);
@@ -357,7 +381,7 @@ export function processThalamic(text: string, sessionId: string): ThalamicSignal
 
   const mode = determineMode(nuclei);
   const combined = calculateCombined(nuclei, mode);
-  const dampening = getSensoryGating(entities, sessionId);
+  const dampening = getSensoryGating(entities, sessionId, readOnly);
 
   // Action gates
   // 10.4: Low energy → raise gates (store less). High energy → lower gates (store more)

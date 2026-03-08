@@ -10,26 +10,40 @@ interface ContextPrediction {
   timestamp: number;
 }
 
-export function savePrediction(nodeIds: string[], topic?: string): void {
+function getContextPredictionKeys(sessionId?: string): string[] {
+  return sessionId ? [`context_prediction_${sessionId}`, 'context_prediction'] : ['context_prediction'];
+}
+
+export function savePrediction(nodeIds: string[], topic?: string, sessionId?: string): void {
   const db = getDb();
   const prediction: ContextPrediction = {
     node_ids: nodeIds.slice(0, 30),
     topic,
     timestamp: Date.now(),
   };
-  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run('context_prediction', JSON.stringify(prediction), Date.now());
+
+  for (const key of getContextPredictionKeys(sessionId)) {
+    db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run(key, JSON.stringify(prediction), Date.now());
+  }
 }
 
-export function compareAndCorrect(feedbackSignal: 'positive' | 'negative' | 'neutral'): { corrected: number } {
+export function compareAndCorrect(
+  feedbackSignal: 'positive' | 'negative' | 'neutral',
+  sessionId?: string,
+): { corrected: number } {
   if (feedbackSignal === 'neutral') return { corrected: 0 };
 
   let corrected = 0;
 
   try {
     const db = getDb();
-    const row = db.prepare("SELECT value FROM system_state WHERE key = 'context_prediction'")
-      .get() as { value: string } | undefined;
+    let row: { value: string } | undefined;
+    for (const key of getContextPredictionKeys(sessionId)) {
+      row = db.prepare('SELECT value FROM system_state WHERE key = ?')
+        .get(key) as { value: string } | undefined;
+      if (row) break;
+    }
     if (!row) return { corrected: 0 };
 
     const prediction: ContextPrediction = JSON.parse(row.value);
