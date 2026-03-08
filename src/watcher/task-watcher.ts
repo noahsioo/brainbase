@@ -131,9 +131,10 @@ function isSimilarTask(a: string, b: string): boolean {
   return union > 0 && intersection / union > 0.6;
 }
 
-export function getOpenTasks(): Node[] {
+export function getOpenTasks(sessionId?: string): Node[] {
   const taskNodes = getNodes({ type: 'task', limit: 50 });
   return taskNodes.filter(n => {
+    if (sessionId && n.source !== `task-watcher:${sessionId}`) return false;
     const content = n.content.toLowerCase();
     return !content.startsWith('[done]') && !content.startsWith('[erledigt]');
   });

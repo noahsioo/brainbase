@@ -1321,8 +1321,8 @@ function buildProspectionSlot(budget: number, currentTopic?: string): string {
 
 // ── Task Reminder (unchanged) ───────────────────────────────
 
-function buildTaskReminderSlot(budget: number): string {
-  const tasks = getOpenTasks();
+function buildTaskReminderSlot(budget: number, sessionId?: string): string {
+  const tasks = getOpenTasks(sessionId);
   if (tasks.length === 0) return '';
 
   let text = '## Offene Aufgaben\n';
@@ -2058,7 +2058,7 @@ export function generateContext(
     if (ghostCtx) sections.unshift(ghostCtx);
 
     if (sessionPhaseProfile.showSessionMomentum) {
-      const taskReminder = buildTaskReminderSlot(budget.sessionMomentum);
+      const taskReminder = buildTaskReminderSlot(budget.sessionMomentum, sessionId);
       if (taskReminder) sections.push(taskReminder);
     }
 
