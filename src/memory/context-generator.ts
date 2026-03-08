@@ -1444,10 +1444,52 @@ function buildCounterEvidenceSlot(budget: number): string {
 
 // ── Meta Insight (unchanged) ────────────────────────────────
 
-function buildMetaInsightSlot(budget: number, topicExpertise?: number, empathyMode?: string, taskMode?: string): string {
+function getSessionFokSignal(sessionId?: string): { topic?: string; has_fragments?: boolean; weakly_activated?: number } | null {
+  try {
+    const db = getDb();
+    if (sessionId) {
+      const sessionRow = db.prepare('SELECT value FROM system_state WHERE key = ?')
+        .get(`fok_signal_${sessionId}`) as { value: string } | undefined;
+      if (!sessionRow) return null;
+      return JSON.parse(sessionRow.value) as { topic?: string; has_fragments?: boolean; weakly_activated?: number };
+    }
+
+    const row = db.prepare("SELECT value FROM system_state WHERE key = 'fok_signal'")
+      .get() as { value: string } | undefined;
+    if (!row) return null;
+    return JSON.parse(row.value) as { topic?: string; has_fragments?: boolean; weakly_activated?: number };
+  } catch {
+    return null;
+  }
+}
+
+function isFokRelevantToTopic(
+  fok: { topic?: string; has_fragments?: boolean; weakly_activated?: number } | null,
+  currentTopic?: string,
+): boolean {
+  if (!fok?.has_fragments) return false;
+  if (!currentTopic) return true;
+
+  const fokTopic = normalizeProfileHint(fok.topic || '');
+  const normalizedTopic = normalizeProfileHint(currentTopic);
+  if (!fokTopic || !normalizedTopic) return true;
+  return fokTopic.includes(normalizedTopic) || normalizedTopic.includes(fokTopic);
+}
+
+function buildMetaInsightSlot(
+  budget: number,
+  topicExpertise?: number,
+  empathyMode?: string,
+  taskMode?: string,
+  sessionId?: string,
+  currentTopic?: string,
+  sessionPhase: SessionPhaseBudgetProfile['phase'] = 'active',
+): string {
   const profile = getMetaProfile();
 
   const lines: string[] = [];
+  const allowGlobalUserMeta = sessionPhase !== 'bootstrap';
+  const allowGlobalSystemMeta = sessionPhase === 'deep';
 
   // 13.2: Empathy-based hint (first, most important)
   if (empathyMode === 'affective') {
@@ -1456,7 +1498,7 @@ function buildMetaInsightSlot(budget: number, topicExpertise?: number, empathyMo
     lines.push('User hat ein konkretes Problem. Fokus auf Loesung und technische Details.');
   }
 
-  if (profile.dominant_type !== 'unknown') {
+  if (allowGlobalUserMeta && profile.dominant_type !== 'unknown') {
     const hints: Record<string, string> = {
       pointer: 'User ist ein "Zeiger" - beobachte Verhalten statt auf Erklaerungen zu warten',
       explicit: 'User erklaert Praeferenzen direkt - achte auf explizite Anweisungen',
@@ -1467,7 +1509,7 @@ function buildMetaInsightSlot(budget: number, topicExpertise?: number, empathyMo
   }
 
   const lp = profile.learning_profile;
-  if (lp && profile.total_messages_analyzed >= 20) {
+  if (allowGlobalUserMeta && lp && profile.total_messages_analyzed >= 20) {
     const dominant = [
       { key: 'examples', val: lp.learns_by_examples, hint: 'User lernt am besten durch Beispiele. Gib konkrete Beispiele.' },
       { key: 'doing', val: lp.learns_by_doing, hint: 'User lernt durch Machen. Weniger erklaeren, mehr umsetzen.' },
@@ -1509,68 +1551,72 @@ function buildMetaInsightSlot(budget: number, topicExpertise?: number, empathyMo
   }
 
   // 15.1: FOK warning
-  try {
-    const fokRow = getDb().prepare("SELECT value FROM system_state WHERE key = 'fok_signal'")
-      .get() as { value: string } | undefined;
-    if (fokRow) {
-      const fok = JSON.parse(fokRow.value);
-      if (fok.has_fragments) {
-        lines.push(`Zu "${fok.topic}" hat das System fragmentarische Erinnerungen (${fok.weakly_activated} Bruchstuecke). Details wuerden helfen.`);
-      }
-    }
-  } catch {}
+  const fok = getSessionFokSignal(sessionId);
+  if (isFokRelevantToTopic(fok, currentTopic)) {
+    lines.push(`Zu "${fok?.topic}" hat das System fragmentarische Erinnerungen (${fok?.weakly_activated || 0} Bruchstuecke). Details wuerden helfen.`);
+  }
 
   // 15.4: Self-Model summary
-  const selfModel = getSelfModel();
-  if (selfModel) {
-    const maturity = selfModel.cortical_ratio > 0.3 ? 'reif' : selfModel.cortical_ratio > 0.1 ? 'wachsend' : 'jung';
-    lines.push(`System: ${selfModel.total_nodes} Fakten, ${selfModel.entity_count} Entitaeten, ${maturity} (${Math.round(selfModel.cortical_ratio * 100)}% langzeitgespeichert).`);
-    if (selfModel.strongest_domains.length > 0) {
-      lines.push(`Staerkste Bereiche: ${selfModel.strongest_domains.join(', ')}.`);
-    }
-    if (selfModel.weakest_areas.length > 0) {
-      lines.push(`Wissensluecken: ${selfModel.weakest_areas.join(', ')}.`);
+  if (allowGlobalSystemMeta) {
+    const selfModel = getSelfModel();
+    if (selfModel) {
+      const maturity = selfModel.cortical_ratio > 0.3 ? 'reif' : selfModel.cortical_ratio > 0.1 ? 'wachsend' : 'jung';
+      lines.push(`System: ${selfModel.total_nodes} Fakten, ${selfModel.entity_count} Entitaeten, ${maturity} (${Math.round(selfModel.cortical_ratio * 100)}% langzeitgespeichert).`);
+      if (selfModel.strongest_domains.length > 0) {
+        lines.push(`Staerkste Bereiche: ${selfModel.strongest_domains.join(', ')}.`);
+      }
+      if (selfModel.weakest_areas.length > 0) {
+        lines.push(`Wissensluecken: ${selfModel.weakest_areas.join(', ')}.`);
+      }
     }
   }
 
   // 18.2: Entwicklungsphase im Context
-  const devPhase = getDevelopmentPhase();
-  const phaseNames: Record<string, string> = {
-    infant: 'Saeuglings-Phase (alles aufnehmen)',
-    child: 'Kind-Phase (schnell lernen)',
-    teen: 'Teenager-Phase (spezialisieren)',
-    adult: 'Erwachsenen-Phase (stabil + selektiv)',
-    wise: 'Weise-Phase (tiefes Wissensnetz)',
-  };
-  lines.push(`Entwicklungsphase: ${phaseNames[devPhase.phase]} (Session ${devPhase.session_count}).`);
+  if (allowGlobalSystemMeta) {
+    const devPhase = getDevelopmentPhase();
+    const phaseNames: Record<string, string> = {
+      infant: 'Saeuglings-Phase (alles aufnehmen)',
+      child: 'Kind-Phase (schnell lernen)',
+      teen: 'Teenager-Phase (spezialisieren)',
+      adult: 'Erwachsenen-Phase (stabil + selektiv)',
+      wise: 'Weise-Phase (tiefes Wissensnetz)',
+    };
+    lines.push(`Entwicklungsphase: ${phaseNames[devPhase.phase]} (Session ${devPhase.session_count}).`);
+  }
 
   // 17.3: DMN — kreative Verbindungen seit letzter Nachricht
-  try {
-    const dmnRow = getDb().prepare(
-      "SELECT COUNT(*) as c FROM edges WHERE type = 'inferred' AND created_at > ?"
-    ).get(Date.now() - 30 * 60 * 1000) as { c: number };
-    if (dmnRow.c > 0) {
-      lines.push(`System hat ${dmnRow.c} neue Verbindungen im Hintergrund entdeckt.`);
-    }
-  } catch {}
+  if (allowGlobalSystemMeta) {
+    try {
+      const dmnRow = getDb().prepare(
+        "SELECT COUNT(*) as c FROM edges WHERE type = 'inferred' AND created_at > ?"
+      ).get(Date.now() - 30 * 60 * 1000) as { c: number };
+      if (dmnRow.c > 0) {
+        lines.push(`System hat ${dmnRow.c} neue Verbindungen im Hintergrund entdeckt.`);
+      }
+    } catch {}
+  }
 
   // 17.4: System-Mood im Context
-  const sysMoodMeta = getSystemMood();
-  if (sysMoodMeta.energy < 0.3) {
-    lines.push('System-Energie niedrig. Fokus auf Wesentliches.');
-  } else if (sysMoodMeta.curiosity > 0.7) {
-    lines.push('System ist neugierig — bereit fuer neue Themen.');
+  if (allowGlobalSystemMeta) {
+    const sysMoodMeta = getSystemMood();
+    if (sysMoodMeta.energy < 0.3) {
+      lines.push('System-Energie niedrig. Fokus auf Wesentliches.');
+    } else if (sysMoodMeta.curiosity > 0.7) {
+      lines.push('System ist neugierig — bereit fuer neue Themen.');
+    }
   }
 
   // 19.4: Meta-Calibration hint
-  try {
-    const cal = calibrateConfidence();
-    if (cal.direction === 'down') {
-      lines.push('System-Kalibration: Confidence wird korrigiert (overconfident). Fakten mit Vorsicht.');
-    } else if (cal.direction === 'up') {
-      lines.push('System-Kalibration: Wissen ist zuverlaessig (gut kalibriert).');
-    }
-  } catch { /* non-fatal */ }
+  if (allowGlobalSystemMeta) {
+    try {
+      const cal = calibrateConfidence();
+      if (cal.direction === 'down') {
+        lines.push('System-Kalibration: Confidence wird korrigiert (overconfident). Fakten mit Vorsicht.');
+      } else if (cal.direction === 'up') {
+        lines.push('System-Kalibration: Wissen ist zuverlaessig (gut kalibriert).');
+      }
+    } catch { /* non-fatal */ }
+  }
 
   if (lines.length === 0) return '';
 
@@ -2011,7 +2057,15 @@ export function generateContext(
     const counterEvidence = buildCounterEvidenceSlot(budget.extras);
     if (counterEvidence) sections.push(counterEvidence);
 
-    const metaInsight = buildMetaInsightSlot(budget.extras, topicExpertise, effectiveEmpathyMode, effectiveTaskMode);
+    const metaInsight = buildMetaInsightSlot(
+      budget.extras,
+      topicExpertise,
+      effectiveEmpathyMode,
+      effectiveTaskMode,
+      sessionId,
+      currentTopic,
+      sessionPhaseProfile.phase,
+    );
     if (metaInsight) sections.push(metaInsight);
 
     const episodes = buildEpisodeSlot(budget.entityGraph, currentTopic, sessionId);
