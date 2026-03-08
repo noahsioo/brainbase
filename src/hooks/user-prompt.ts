@@ -633,7 +633,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
 
   // 25.8: Communication Learner — Context-Effektivitaet tracken
   if (shouldPersistState) {
-    try { recordContextModeDelivery(contextMode, context?.length || 0); } catch { /* non-fatal */ }
+    try { recordContextModeDelivery(contextMode, context?.length || 0, sessionId); } catch { /* non-fatal */ }
   }
 
   let finalContext = context;

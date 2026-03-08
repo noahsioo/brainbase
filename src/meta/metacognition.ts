@@ -1,4 +1,5 @@
 import { getDb, type Node } from '../memory/store.js';
+import { getActivatedNodes } from '../memory/activation.js';
 
 // ── 15.1: Feeling of Knowing ────────────────────────────────
 
@@ -10,18 +11,26 @@ export interface FOKSignal {
   has_fragments: boolean;
 }
 
-export function detectFeelingOfKnowing(topic?: string): FOKSignal | null {
+export function detectFeelingOfKnowing(topic?: string, sessionId?: string): FOKSignal | null {
   if (!topic) return null;
 
-  const db = getDb();
+  let weakCount = 0;
+  let strongCount = 0;
 
-  const weakCount = (db.prepare(
-    "SELECT COUNT(*) as c FROM nodes WHERE activation BETWEEN 0.02 AND 0.15 AND importance >= 0.4"
-  ).get() as { c: number }).c;
+  if (sessionId) {
+    const activated = getActivatedNodes(200, sessionId);
+    weakCount = activated.filter(node => node.activation >= 0.02 && node.activation <= 0.15 && node.importance >= 0.4).length;
+    strongCount = activated.filter(node => node.activation > 0.3).length;
+  } else {
+    const db = getDb();
+    weakCount = (db.prepare(
+      "SELECT COUNT(*) as c FROM nodes WHERE activation BETWEEN 0.02 AND 0.15 AND importance >= 0.4"
+    ).get() as { c: number }).c;
 
-  const strongCount = (db.prepare(
-    "SELECT COUNT(*) as c FROM nodes WHERE activation > 0.3"
-  ).get() as { c: number }).c;
+    strongCount = (db.prepare(
+      "SELECT COUNT(*) as c FROM nodes WHERE activation > 0.3"
+    ).get() as { c: number }).c;
+  }
 
   if (weakCount < 3) return null;
 
