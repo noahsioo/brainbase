@@ -24,7 +24,7 @@ import { calculateAttentionState } from '../meta/metacognition.js';
 import { getSystemMood } from '../senses/interoception.js';
 import { shouldAllowLLMCall } from '../regulation/energy.js';
 import { calculateStressLevel } from '../regulation/stress-response.js';
-import { recordContextModeDelivery } from '../learning/communication-learner.js';
+import { getLastContextMode, recordContextFeedback, recordContextModeDelivery } from '../learning/communication-learner.js';
 import { inferMessageIntent, updateWorkingMemory, getWorkingMemory } from '../memory/working-memory.js';
 import {
   setSessionAttentionState,
@@ -297,6 +297,10 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
 
   const feedback = detectFeedbackSignal(input.message);
   if (shouldPersistState) {
+    const lastContextMode = getLastContextMode(sessionId);
+    if (lastContextMode && feedback !== 'neutral') {
+      recordContextFeedback(lastContextMode, feedback === 'positive', sessionId);
+    }
     applyFeedbackToRecentNodes(feedback, sessionId);
     applyContextFeedback(feedback, sessionId);
     applySomaticMarkers(feedback, sessionId);

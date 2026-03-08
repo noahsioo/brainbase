@@ -13,6 +13,10 @@ function getContextEffectivenessKey(sessionId?: string): string {
   return sessionId ? `context_effectiveness_${sessionId}` : 'context_effectiveness';
 }
 
+function getLastContextModeKey(sessionId?: string): string {
+  return sessionId ? `last_context_mode_${sessionId}` : 'last_context_mode';
+}
+
 function loadContextEffectiveness(
   sessionId?: string,
   allowGlobalFallback = true,
@@ -50,6 +54,7 @@ function saveContextEffectiveness(
 
 export function recordContextModeDelivery(mode: string, length: number, sessionId?: string): void {
   const stats = loadContextEffectiveness(sessionId, false);
+  const db = getDb();
 
   if (!stats[mode]) {
     stats[mode] = { context_mode: mode, context_length: length, positive_responses: 0, negative_responses: 0, total_uses: 0 };
@@ -60,6 +65,8 @@ export function recordContextModeDelivery(mode: string, length: number, sessionI
   );
 
   saveContextEffectiveness(stats, sessionId);
+  db.prepare('INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(getLastContextModeKey(sessionId), mode, Date.now());
 }
 
 export function recordContextFeedback(mode: string, positive: boolean, sessionId?: string): void {
@@ -89,4 +96,23 @@ export function getBestContextMode(sessionId?: string): string | null {
     }
     return best;
   } catch { return null; }
+}
+
+export function getLastContextMode(sessionId?: string): string | null {
+  const db = getDb();
+  const keys = sessionId
+    ? [getLastContextModeKey(sessionId), getLastContextModeKey()]
+    : [getLastContextModeKey()];
+
+  for (const key of keys) {
+    try {
+      const row = db.prepare('SELECT value FROM system_state WHERE key = ?')
+        .get(key) as { value: string } | undefined;
+      if (row?.value) return row.value;
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
