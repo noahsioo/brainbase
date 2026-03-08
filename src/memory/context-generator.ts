@@ -1,6 +1,6 @@
 import { getDb, getNodes, getEmbedding, getAllEntities, getEdgesForNode, findEntityByName, getNode, type Node, type NodeMetadata } from './store.js';
 import { getStyleDNA } from '../learning/style-analyzer.js';
-import { getActivatedNodes } from './activation.js';
+import { getActivatedNodes, getSessionActivationValue, setSessionActivationValue } from './activation.js';
 import { getSystemState, getDevelopmentPhase, setSystemState } from './cold-start.js';
 import { getMetaProfile } from '../tacit/meta-learner.js';
 import { getOpenTasks } from '../watcher/task-watcher.js';
@@ -1264,7 +1264,7 @@ function buildSerendipitySlot(budget: number, mood?: string, salience?: string):
 
 // ── 22.4: Prospection — Zukunft konstruieren ────────────────
 
-function buildProspectionSlot(budget: number, currentTopic?: string): string {
+function buildProspectionSlot(budget: number, currentTopic?: string, sessionId?: string, readOnly = false): string {
   if (!currentTopic) return '';
   const db = getDb();
   const parts: string[] = [];
@@ -1304,13 +1304,18 @@ function buildProspectionSlot(budget: number, currentTopic?: string): string {
       parts.push(`Haeufig danach: ${sorted[0][0]}`);
     }
 
-    // Pre-activate related nodes for expected next topic
-    const expectedNext = sorted[0][0];
-    const relatedNodes = db.prepare(
-      "SELECT id FROM nodes WHERE content LIKE ? AND activation < 0.1 LIMIT 5"
-    ).all(`%${expectedNext.split(' ')[0]}%`) as Array<{ id: string }>;
-    for (const node of relatedNodes) {
-      db.prepare('UPDATE nodes SET activation = MAX(activation, 0.05) WHERE id = ?').run(node.id);
+    // Pre-activate expected-next nodes only in the local session overlay.
+    if (!readOnly && sessionId) {
+      const expectedNext = sorted[0][0];
+      const relatedNodes = db.prepare(
+        "SELECT id FROM nodes WHERE content LIKE ? LIMIT 5"
+      ).all(`%${expectedNext.split(' ')[0]}%`) as Array<{ id: string }>;
+      for (const node of relatedNodes) {
+        const currentActivation = getSessionActivationValue(node.id, sessionId);
+        if (currentActivation < 0.05) {
+          setSessionActivationValue(node.id, sessionId, 0.05);
+        }
+      }
     }
   }
 
@@ -2115,7 +2120,7 @@ export function generateContext(
     if (tot) sections.push(tot);
 
     // 22.4: Prospection — Zukunft konstruieren (Schema + zeitliche Nachfolger)
-    const prospection = buildProspectionSlot(budget.extras, currentTopic);
+    const prospection = buildProspectionSlot(budget.extras, currentTopic, sessionId, readOnly);
     if (prospection) sections.push(prospection);
   }
 
