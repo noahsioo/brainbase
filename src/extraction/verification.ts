@@ -160,6 +160,19 @@ export function verifyExtraction(
       continue;
     }
 
+    // Reminders: each is unique by time, skip duplicate detection
+    if (fact.type === 'reminder') {
+      if (fact.content.length > 300) continue;
+      const confidence = Math.min(0.8, Math.max(0, fact.confidence));
+      result.new_facts.push({
+        content: fact.content,
+        type: 'reminder',
+        confidence,
+        metadata: fact.metadata,
+      });
+      continue;
+    }
+
     let content = fact.content;
     if (EMOTIONAL_ABSOLUTES.test(content)) {
       content = cleanEmotionalContent(content);

@@ -19,8 +19,8 @@ const MONTH_MAP: Record<string, number> = {
   januar: 0, februar: 1, maerz: 2, märz: 2, april: 3, mai: 4, juni: 5,
   juli: 6, august: 7, september: 8, oktober: 9, november: 10, dezember: 11,
   // Englisch
-  january: 0, february: 1, march: 2, may: 4, june: 5,
-  july: 6, october: 9, december: 11,
+  january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+  july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
 };
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -125,14 +125,25 @@ export function parseTemporalExpression(text: string): TemporalParsed | null {
     }
   }
 
-  // === RELATIVE: naechsten [Wochentag] / next [weekday] ===
-  const nextWeekdayDE = lower.match(/n[aä]chsten?\s+(\w+)/);
+  // === RELATIVE: naechsten/kommenden [Wochentag] / next [weekday] ===
+  const nextWeekdayDE = lower.match(/(?:n[aä]chsten?|kommende[rnm]?)\s+(\w+)/);
   if (nextWeekdayDE) {
     const day = WEEKDAY_MAP[nextWeekdayDE[1]];
     if (day !== undefined) {
       const result = getNextWeekday(day);
       applyTime(result, text);
       return { date: result.getTime(), confidence: 0.8, original: nextWeekdayDE[0], type: 'relative' };
+    }
+  }
+
+  // "am Montag" / "on Monday" → naechstes Vorkommen
+  const onWeekday = lower.match(/(?:am|on)\s+(\w+)/);
+  if (onWeekday) {
+    const day = WEEKDAY_MAP[onWeekday[1]];
+    if (day !== undefined) {
+      const result = getNextWeekday(day);
+      applyTime(result, text);
+      return { date: result.getTime(), confidence: 0.7, original: onWeekday[0], type: 'relative' };
     }
   }
 
@@ -164,7 +175,7 @@ export function parseTemporalExpression(text: string): TemporalParsed | null {
   }
 
   // === "in [N] Tagen/Stunden/Wochen" / "in [N] days/hours/weeks" ===
-  const inNUnits = lower.match(/in\s+(\d+|[a-zäöü]+)\s+(tag(?:en)?|stunde[n]?|woche[n]?|day[s]?|hour[s]?|week[s]?)/i);
+  const inNUnits = lower.match(/in\s+(\d+|[a-zäöü]+)\s+(tag(?:en)?|stunde[n]?|woche[n]?|monat(?:en)?|day[s]?|hour[s]?|week[s]?|month[s]?)/i);
   if (inNUnits) {
     const n = parseNumber(inNUnits[1]);
     if (n && n > 0 && n <= 365) {
@@ -177,6 +188,9 @@ export function parseTemporalExpression(text: string): TemporalParsed | null {
         result.setTime(result.getTime() + n * 60 * 60 * 1000);
       } else if (/^(woche|week)/.test(unit)) {
         result.setDate(result.getDate() + n * 7);
+        result.setHours(9, 0, 0, 0);
+      } else if (/^(monat|month)/.test(unit)) {
+        result.setMonth(result.getMonth() + n);
         result.setHours(9, 0, 0, 0);
       }
       applyTime(result, text);
@@ -244,6 +258,41 @@ export function parseTemporalExpression(text: string): TemporalParsed | null {
     result.setHours(17, 0, 0, 0);
     const match = lower.match(/diese\s+woche|this\s+week/)!;
     return { date: result.getTime(), confidence: 0.5, original: match[0], type: 'relative' };
+  }
+
+  // === RECURRING: "jeden Montag" / "every Monday" / "taeglich" / "daily" ===
+  const recurringDE = lower.match(/jeden\s+(\w+)/);
+  if (recurringDE) {
+    const day = WEEKDAY_MAP[recurringDE[1]];
+    if (day !== undefined) {
+      const result = getNextWeekday(day);
+      return { date: result.getTime(), confidence: 0.8, original: recurringDE[0], type: 'recurring' };
+    }
+  }
+
+  const recurringEN = lower.match(/every\s+(\w+)/);
+  if (recurringEN) {
+    const day = WEEKDAY_MAP[recurringEN[1]];
+    if (day !== undefined) {
+      const result = getNextWeekday(day);
+      return { date: result.getTime(), confidence: 0.8, original: recurringEN[0], type: 'recurring' };
+    }
+  }
+
+  if (/\bt[aä]glich\b/i.test(lower) || /\bdaily\b/i.test(lower)) {
+    const result = new Date();
+    result.setDate(result.getDate() + 1);
+    result.setHours(9, 0, 0, 0);
+    const match = lower.match(/t[aä]glich|daily/)!;
+    return { date: result.getTime(), confidence: 0.8, original: match[0], type: 'recurring' };
+  }
+
+  if (/\bw[oö]chentlich\b/i.test(lower) || /\bweekly\b/i.test(lower)) {
+    const result = new Date();
+    result.setDate(result.getDate() + 7);
+    result.setHours(9, 0, 0, 0);
+    const match = lower.match(/w[oö]chentlich|weekly/)!;
+    return { date: result.getTime(), confidence: 0.8, original: match[0], type: 'recurring' };
   }
 
   return null;
