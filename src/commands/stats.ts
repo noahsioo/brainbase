@@ -1,8 +1,17 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { getStats, getDb } from '../memory/store.js';
-import { getActivatedNodes } from '../memory/activation.js';
 import { getSystemState } from '../memory/cold-start.js';
+
+function getActiveOverlayNodeCount(): number {
+  const db = getDb();
+  return (db.prepare(`
+    SELECT COUNT(DISTINCT sa.node_id) as c
+    FROM session_activations sa
+    JOIN sessions s ON s.id = sa.session_id
+    WHERE s.ended_at IS NULL AND sa.activation > 0
+  `).get() as { c: number }).c;
+}
 
 export const statsCommand = new Command('stats')
   .description('Show brain statistics')
@@ -10,11 +19,11 @@ export const statsCommand = new Command('stats')
     const stats = getStats();
 
     console.log(chalk.bold('\n  BrainBase - Brain Statistics\n'));
-    const activeNodes = getActivatedNodes();
+    const activeNodeCount = getActiveOverlayNodeCount();
 
     console.log(`  Total Nodes:     ${chalk.cyan(stats.totalNodes.toString())}`);
     console.log(`  Total Edges:     ${chalk.cyan(stats.totalEdges.toString())}`);
-    console.log(`  Active Nodes:    ${chalk.yellow(activeNodes.length.toString())}`);
+    console.log(`  Active Nodes:    ${chalk.yellow(activeNodeCount.toString())}`);
     console.log(`  Total Patterns:  ${chalk.cyan(stats.totalPatterns.toString())}`);
     console.log(`  Total Sessions:  ${chalk.cyan(stats.totalSessions.toString())}`);
 
