@@ -9,6 +9,8 @@ import { recordCreation, recordGarbage, recordEvidence } from '../learning/self-
 import { recordGarbageType } from '../hygiene/immune-system.js';
 import { recordLLMCall } from '../regulation/energy.js';
 import { generateContext } from '../memory/context-generator.js';
+import { createProspectiveMemory } from '../memory/prospective.js';
+import { parseTemporalExpression } from '../extraction/temporal-parser.js';
 
 const CONFIDENCE_CAP = 0.8;
 const INVALID_TOPIC_NAMES = new Set([
@@ -133,8 +135,12 @@ Only use facts for these SPECIFIC cases:
 - A concrete DECISION with reasoning: "Switched from X to Y because Z" (type: decision)
 - User's IDENTITY info: name, age, role, location (type: identity)
 - Code EXAMPLES of user's work style (type: example, up to 2000 chars)
+- A REMINDER or future intention: "Naechsten Donnerstag Zahnarzt" (type: reminder)
+  The user mentions something they need to do/remember in the future.
+  MUST include: WHAT needs to happen. SHOULD include: WHEN (date/time/day).
+  Do NOT use for vague plans ("irgendwann will ich...") — only concrete intentions with a time reference.
 
-Allowed fact types: preference, decision, identity, example
+Allowed fact types: preference, decision, identity, example, reminder
 Do NOT use any other fact type. If info fits as entity+relation, use that instead.
 
 ## DEFAULT: nothing_new: true
@@ -217,7 +223,7 @@ Respond with this exact JSON:
     { "from": "EntityA", "to": "EntityB", "type": "uses|likes|dislikes|builds|knows|part_of|works_with|prefers|wants|is_a|located_at|has_skill|related_to", "confidence": 0.3-0.5 }
   ],
   "new_facts": [
-    { "content": "...", "type": "preference|decision|identity|example", "confidence": 0.3-0.5, "metadata": { "category": "optional" } }
+    { "content": "...", "type": "preference|decision|identity|example|reminder", "confidence": 0.3-0.5, "metadata": { "category": "optional" } }
   ],
   "topic": { "name": "short concrete topic", "confidence": 0.0-1.0 },
   "intent": "question|statement|request|feedback|greeting|other",
@@ -534,8 +540,28 @@ export async function extractFromMessageDetailed(
       if (!fact.content || fact.content.length < 5 || fact.content.length > maxLen) continue;
       if (isGarbage(fact.content)) { recordGarbage(); recordGarbageType(fact.content); continue; }
 
-      const validTypes = ['preference', 'decision', 'identity', 'example'];
+      const validTypes = ['preference', 'decision', 'identity', 'example', 'reminder'];
       if (!validTypes.includes(fact.type)) continue;
+
+      // V6-1: Reminder → Prospective Memory (skip normal fact storage)
+      if (fact.type === 'reminder') {
+        const temporal = parseTemporalExpression(fact.content);
+        const TEMPORAL_STOPWORDS = /^(naechsten?|nächsten?|morgen|uebermorgen|übermorgen|heute|next|tomorrow|the|and|und|oder|for|fuer|für|with|mit|bis|until|by|am|um|at|in|on)$/i;
+        const triggerWords = fact.content
+          .split(/\s+/)
+          .filter(w => w.length > 3 && !TEMPORAL_STOPWORDS.test(w))
+          .map(w => w.toLowerCase())
+          .slice(0, 5);
+
+        createProspectiveMemory(fact.content, triggerWords, {
+          importance: 0.85,
+          source: `llm:${sessionId}`,
+          trigger_date: temporal?.date,
+          trigger_type: temporal ? (triggerWords.length > 0 ? 'both' : 'time') : 'event',
+        });
+        recordCreation();
+        continue;
+      }
 
       // V5-2: New facts start with max 0.5 confidence — must earn higher via Evidence
       const NEW_FACT_CONFIDENCE_CAP = 0.5;

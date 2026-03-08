@@ -145,7 +145,10 @@ function cleanupSessionState(sessionId: string): void {
       `last_context_node_ids_${sessionId}`,
       `context_prediction_${sessionId}`,
       `context_feedback_scores_${sessionId}`,
+      `context_effectiveness_${sessionId}`,
       `stress_level_${sessionId}`,
+      `fok_signal_${sessionId}`,
+      `hunger_zones_${sessionId}`,
     ];
     for (const key of keys) {
       db.prepare("DELETE FROM system_state WHERE key = ?").run(key);

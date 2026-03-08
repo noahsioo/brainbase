@@ -38,6 +38,9 @@ export function runIdleTick(): IdleResult {
   // 2. Hunger Zones pruefen
   try {
     detectHungerZones();
+    for (const sessionId of getActiveSessionIds(5)) {
+      detectHungerZones(sessionId);
+    }
     result.hunger_checked = true;
   } catch { /* non-fatal */ }
 

@@ -13,10 +13,15 @@ function getContextEffectivenessKey(sessionId?: string): string {
   return sessionId ? `context_effectiveness_${sessionId}` : 'context_effectiveness';
 }
 
-function loadContextEffectiveness(sessionId?: string): Record<string, ContextEffectiveness> {
+function loadContextEffectiveness(
+  sessionId?: string,
+  allowGlobalFallback = true,
+): Record<string, ContextEffectiveness> {
   const db = getDb();
   const keys = sessionId
-    ? [getContextEffectivenessKey(sessionId), getContextEffectivenessKey()]
+    ? allowGlobalFallback
+      ? [getContextEffectivenessKey(sessionId), getContextEffectivenessKey()]
+      : [getContextEffectivenessKey(sessionId)]
     : [getContextEffectivenessKey()];
 
   for (const key of keys) {
@@ -44,7 +49,7 @@ function saveContextEffectiveness(
 }
 
 export function recordContextModeDelivery(mode: string, length: number, sessionId?: string): void {
-  const stats = loadContextEffectiveness(sessionId);
+  const stats = loadContextEffectiveness(sessionId, false);
 
   if (!stats[mode]) {
     stats[mode] = { context_mode: mode, context_length: length, positive_responses: 0, negative_responses: 0, total_uses: 0 };
@@ -58,7 +63,7 @@ export function recordContextModeDelivery(mode: string, length: number, sessionI
 }
 
 export function recordContextFeedback(mode: string, positive: boolean, sessionId?: string): void {
-  const stats = loadContextEffectiveness(sessionId);
+  const stats = loadContextEffectiveness(sessionId, false);
 
   if (!stats[mode]) return;
   if (positive) stats[mode].positive_responses++;
@@ -69,7 +74,7 @@ export function recordContextFeedback(mode: string, positive: boolean, sessionId
 
 export function getBestContextMode(sessionId?: string): string | null {
   try {
-    const stats = loadContextEffectiveness(sessionId);
+    const stats = loadContextEffectiveness(sessionId, true);
 
     let best: string | null = null;
     let bestScore = -1;

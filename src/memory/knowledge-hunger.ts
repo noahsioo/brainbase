@@ -1,4 +1,5 @@
-import { getDb, getAllEntities, getEdgesForNode, type Node } from './store.js';
+import { getDb, getAllEntities, getEdgesForNode, getNode, getSessionActivationRows, type Node } from './store.js';
+import type { FOKSignal } from '../meta/metacognition.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -11,53 +12,135 @@ export interface HungerZone {
   ignore_count: number;
 }
 
-// ── 9.1: Knowledge Gap Detection ─────────────────────────────
+function getHungerZonesKey(sessionId?: string): string {
+  return sessionId ? `hunger_zones_${sessionId}` : 'hunger_zones';
+}
 
-export function detectHungerZones(): HungerZone[] {
+function getFokSignalKeys(sessionId?: string): string[] {
+  return sessionId ? [`fok_signal_${sessionId}`, 'fok_signal'] : ['fok_signal'];
+}
+
+function readFokSignal(sessionId?: string): FOKSignal | null {
   const db = getDb();
-  const entities = getAllEntities(50);
-  const zones: HungerZone[] = [];
 
-  for (const entity of entities) {
-    const edges = getEdgesForNode(entity.id);
-    const edgeCount = edges.length;
+  for (const key of getFokSignalKeys(sessionId)) {
+    try {
+      const row = db.prepare('SELECT value FROM system_state WHERE key = ?')
+        .get(key) as { value: string } | undefined;
+      if (!row) continue;
 
-    // Get mention count from signal_counters
-    const counter = db.prepare('SELECT count FROM signal_counters WHERE entity = ?')
-      .get(entity.content.toLowerCase()) as { count: number } | undefined;
-    const mentions = counter?.count || 1;
-
-    // hunger = mentions / (edges + 1) — high = hungrig
-    const hunger = mentions / (edgeCount + 1);
-
-    // Only hungry if mentioned multiple times but few connections
-    if (hunger > 1.5 && edgeCount < 3) {
-      // Check ignore count
-      const ignoreRow = db.prepare("SELECT value FROM system_state WHERE key = ?")
-        .get(`hunger_ignore_${entity.id}`) as { value: string } | undefined;
-      const ignoreCount = ignoreRow ? parseInt(ignoreRow.value, 10) : 0;
-
-      // 9.2: Impulse die 3x ignoriert wurden: Prioritaet senken
-      if (ignoreCount >= 3) continue;
-
-      zones.push({
-        entity: entity.content,
-        entity_id: entity.id,
-        hunger_score: hunger * (1 - ignoreCount * 0.25),
-        mentions,
-        edges: edgeCount,
-        ignore_count: ignoreCount,
-      });
+      const parsed = JSON.parse(row.value) as FOKSignal;
+      if (parsed && typeof parsed.topic === 'string') return parsed;
+    } catch {
+      continue;
     }
   }
 
-  // Sort by hunger_score descending, return top 3
+  return null;
+}
+
+function getSessionEntityCandidates(
+  sessionId: string,
+  limit = 50,
+): Array<{ node: Node; activation: number }> {
+  const rows = getSessionActivationRows(sessionId, limit * 4, 0.02);
+  const bestByNodeId = new Map<string, { node: Node; activation: number }>();
+
+  for (const row of rows) {
+    const node = getNode(row.node_id);
+    if (!node || node.type !== 'entity') continue;
+
+    const existing = bestByNodeId.get(node.id);
+    if (!existing || row.activation > existing.activation) {
+      bestByNodeId.set(node.id, { node, activation: row.activation });
+    }
+  }
+
+  return Array.from(bestByNodeId.values())
+    .sort((a, b) => b.activation - a.activation)
+    .slice(0, limit);
+}
+
+function getIgnoreCount(entityId: string): number {
+  const db = getDb();
+  const ignoreRow = db.prepare('SELECT value FROM system_state WHERE key = ?')
+    .get(`hunger_ignore_${entityId}`) as { value: string } | undefined;
+  return ignoreRow ? parseInt(ignoreRow.value, 10) : 0;
+}
+
+function boostZonesFromFok(zones: HungerZone[], sessionId?: string): HungerZone[] {
+  const db = getDb();
+  const fok = readFokSignal(sessionId);
+  if (!fok || !fok.has_fragments || fok.fok_score <= 0.6) return zones;
+
+  const boosted = [...zones];
+  const topicWords = fok.topic.split(/\s+/).filter((word: string) => word.length > 3);
+
+  for (const word of topicWords.slice(0, 2)) {
+    if (boosted.find(zone => zone.entity.toLowerCase() === word.toLowerCase())) continue;
+
+    const entityRow = db.prepare(
+      "SELECT id, content FROM nodes WHERE type = 'entity' AND LOWER(content) = LOWER(?) LIMIT 1"
+    ).get(word) as { id: string; content: string } | undefined;
+
+    if (!entityRow) continue;
+
+    boosted.push({
+      entity: entityRow.content,
+      entity_id: entityRow.id,
+      hunger_score: fok.fok_score * 1.5,
+      mentions: fok.weakly_activated,
+      edges: 0,
+      ignore_count: 0,
+    });
+  }
+
+  return boosted;
+}
+
+// ── 9.1: Knowledge Gap Detection ─────────────────────────────
+
+export function detectHungerZones(sessionId?: string): HungerZone[] {
+  const db = getDb();
+  const sessionCandidates = sessionId ? getSessionEntityCandidates(sessionId, 50) : [];
+  const entities = sessionId ? sessionCandidates.map(candidate => candidate.node) : getAllEntities(50);
+  let zones: HungerZone[] = [];
+
+  for (const [index, entity] of entities.entries()) {
+    const edges = getEdgesForNode(entity.id);
+    const edgeCount = edges.length;
+    const activation = sessionId ? (sessionCandidates[index]?.activation || 0) : 0;
+
+    const counter = db.prepare('SELECT count FROM signal_counters WHERE entity = ?')
+      .get(entity.content.toLowerCase()) as { count: number } | undefined;
+
+    const mentions = sessionId
+      ? Math.max(1, Math.round(((counter?.count || 1) * 0.3) + activation * 12))
+      : (counter?.count || 1);
+
+    const hunger = mentions / (edgeCount + 1);
+    const minHunger = sessionId ? 0.9 : 1.5;
+    if (hunger <= minHunger || edgeCount >= 3) continue;
+
+    const ignoreCount = getIgnoreCount(entity.id);
+    if (ignoreCount >= 3) continue;
+
+    zones.push({
+      entity: entity.content,
+      entity_id: entity.id,
+      hunger_score: hunger * (1 - ignoreCount * 0.25),
+      mentions,
+      edges: edgeCount,
+      ignore_count: ignoreCount,
+    });
+  }
+
+  zones = boostZonesFromFok(zones, sessionId);
   zones.sort((a, b) => b.hunger_score - a.hunger_score);
   const topZones = zones.slice(0, 3);
 
-  // Persist to system_state
-  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
-    .run('hunger_zones', JSON.stringify(topZones), Date.now());
+  db.prepare('INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(getHungerZonesKey(sessionId), JSON.stringify(topZones), Date.now());
 
   return topZones;
 }
@@ -69,9 +152,9 @@ export function generateCuriosityImpulses(zones: HungerZone[]): string[] {
 
   for (const zone of zones.slice(0, 2)) {
     if (zone.edges === 0) {
-      impulses.push(`Zu "${zone.entity}" weiss das System fast nichts — mehr Kontext wuerde helfen.`);
+      impulses.push(`Zu "${zone.entity}" weiss das System fast nichts - mehr Kontext wuerde helfen.`);
     } else {
-      impulses.push(`"${zone.entity}" wird oft erwaehnt, aber Zusammenhaenge fehlen — Details wuerden das Bild vervollstaendigen.`);
+      impulses.push(`"${zone.entity}" wird oft erwaehnt, aber Zusammenhaenge fehlen - Details wuerden das Bild vervollstaendigen.`);
     }
   }
 
@@ -80,27 +163,16 @@ export function generateCuriosityImpulses(zones: HungerZone[]): string[] {
 
 // ── 9.3: Dopamin-Reward bei neuem Wissen ─────────────────────
 
-export function applyDopaminReward(entityName: string): void {
+export function applyDopaminReward(entityName: string, sessionId?: string): void {
   const db = getDb();
-
-  // Find matching hunger zone
-  const zonesRow = db.prepare("SELECT value FROM system_state WHERE key = 'hunger_zones'")
-    .get() as { value: string } | undefined;
-  if (!zonesRow) return;
-
-  const zones: HungerZone[] = JSON.parse(zonesRow.value);
-  const matchedZone = zones.find(z =>
-    z.entity.toLowerCase() === entityName.toLowerCase()
-  );
-
+  const zones = getHungerZones(sessionId);
+  const matchedZone = zones.find(zone => zone.entity.toLowerCase() === entityName.toLowerCase());
   if (!matchedZone) return;
 
-  // Satiate this zone: reset ignore count, lower hunger
-  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+  db.prepare('INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)')
     .run(`hunger_ignore_${matchedZone.entity_id}`, '0', Date.now());
 
-  // Mark as recently satiated (won't show as hungry for a while)
-  db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+  db.prepare('INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)')
     .run(`hunger_satiated_${matchedZone.entity_id}`, String(Date.now()), Date.now());
 }
 
@@ -119,7 +191,6 @@ export function detectLearningOpportunity(text: string, entities: string[]): str
 
   for (const pattern of LEARNING_OPPORTUNITY_PATTERNS) {
     if (pattern.test(text)) {
-      // All entities in this message are potential new knowledge
       newTopics.push(...entities.slice(0, 3));
       break;
     }
@@ -134,21 +205,27 @@ export function markImpulseIgnored(zones: HungerZone[]): void {
   const db = getDb();
   for (const zone of zones) {
     const newCount = zone.ignore_count + 1;
-    db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+    db.prepare('INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)')
       .run(`hunger_ignore_${zone.entity_id}`, String(newCount), Date.now());
   }
 }
 
 // ── Get current hunger zones (from cache) ────────────────────
 
-export function getHungerZones(): HungerZone[] {
+export function getHungerZones(sessionId?: string): HungerZone[] {
   const db = getDb();
-  const row = db.prepare("SELECT value FROM system_state WHERE key = 'hunger_zones'")
-    .get() as { value: string } | undefined;
-  if (!row) return [];
-  try {
-    return JSON.parse(row.value) as HungerZone[];
-  } catch {
-    return [];
+  const keys = sessionId ? [getHungerZonesKey(sessionId), getHungerZonesKey()] : [getHungerZonesKey()];
+
+  for (const key of keys) {
+    try {
+      const row = db.prepare('SELECT value FROM system_state WHERE key = ?')
+        .get(key) as { value: string } | undefined;
+      if (!row) continue;
+      return JSON.parse(row.value) as HungerZone[];
+    } catch {
+      continue;
+    }
   }
+
+  return [];
 }

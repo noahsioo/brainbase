@@ -3,7 +3,7 @@ import { getAdaptiveQualityThreshold } from '../learning/self-tuner.js';
 
 export interface ExtractedFact {
   content: string;
-  type: 'preference' | 'fact' | 'decision' | 'task' | 'project' | 'learning' | 'identity' | 'insight' | 'example';
+  type: 'preference' | 'fact' | 'decision' | 'task' | 'project' | 'learning' | 'identity' | 'insight' | 'example' | 'reminder';
   confidence: number;
   metadata?: { category?: string; quality?: number };
 }
@@ -269,9 +269,9 @@ export function calculateQualityScore(content: string, type: string): number {
     score += 0.1;
   }
 
-  // Identity/example types get a small bonus (usually intentional)
-  if (type === 'identity' || type === 'example') {
-    score += 0.1;
+  // Identity/example/reminder types get a small bonus (usually intentional)
+  if (type === 'identity' || type === 'example' || type === 'reminder') {
+    score += 0.2;
   }
 
   return Math.max(0, Math.min(1.0, score));

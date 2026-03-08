@@ -1,5 +1,4 @@
-import { getDb, type Node } from '../memory/store.js';
-import { getActivatedNodes } from '../memory/activation.js';
+import { getDb, getNode, getSessionActivationRows, type Node } from '../memory/store.js';
 
 // ── 15.1: Feeling of Knowing ────────────────────────────────
 
@@ -18,7 +17,14 @@ export function detectFeelingOfKnowing(topic?: string, sessionId?: string): FOKS
   let strongCount = 0;
 
   if (sessionId) {
-    const activated = getActivatedNodes(200, sessionId);
+    const activated = getSessionActivationRows(sessionId, 400, 0.02)
+      .map(row => {
+        const node = getNode(row.node_id);
+        if (!node) return null;
+        return { activation: row.activation, importance: node.importance };
+      })
+      .filter((entry): entry is { activation: number; importance: number } => entry !== null);
+
     weakCount = activated.filter(node => node.activation >= 0.02 && node.activation <= 0.15 && node.importance >= 0.4).length;
     strongCount = activated.filter(node => node.activation > 0.3).length;
   } else {

@@ -1,4 +1,4 @@
-import { addToRawBuffer, createSession, getDb, getSession, setQueryEmbedding } from '../memory/store.js';
+import { addToRawBuffer, createSession, getDb, getSession, setQueryEmbedding, updateNode } from '../memory/store.js';
 import { activateByEntities, applyAttentionSpotlight, primeActivations, applySTDP, getCurrentlyActivatedEntityIds, getLastSTDPEntities, setLastSTDPEntities, setCurrentEncodingContext, setSystemMode, setCurrentTaskMode, applyDisinhibition, clearDisinhibitionTargets, startNewCoherenceRound, getSessionActivationValue, setSessionActivationValue, getActivatedNodes } from '../memory/activation.js';
 import { generateContext, setSessionTopicEmbedding, setSessionMessageEmbedding, type DetailMode } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
@@ -647,6 +647,17 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       .join('\n');
     const reminderBlock = `\n## Erinnerung\n${reminders}\n`;
     finalContext = finalContext ? finalContext + reminderBlock : reminderBlock;
+
+    // V6-2: Auto-dismiss time-based triggers (shown once = done)
+    for (const match of prospectiveMatches) {
+      if (match.trigger === 'time') {
+        try {
+          const meta = match.node.metadata ? JSON.parse(match.node.metadata) : {};
+          meta.dismissed = true;
+          updateNode(match.node.id, { metadata: JSON.stringify(meta) });
+        } catch { /* non-fatal */ }
+      }
+    }
   }
 
   if (watcherSystemMessage && finalContext) {

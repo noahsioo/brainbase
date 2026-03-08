@@ -10,6 +10,7 @@ import { getScope } from '../memory/session-scope.js';
 import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { initWorkingMemory } from '../memory/working-memory.js';
+import { checkProspectiveTriggers } from '../memory/prospective.js';
 
 interface SessionStartInput {
   session_id?: string;
@@ -66,6 +67,12 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     const lastSummary = getLastSessionSummary();
     const context = generateContext('STANDARD', undefined, undefined, undefined, undefined, undefined, undefined, sessionId);
 
+    // V6-4: Morgen-Check — faellige Reminders bei Session-Start
+    let dueReminders: ReturnType<typeof checkProspectiveTriggers> = [];
+    try {
+      dueReminders = checkProspectiveTriggers('');
+    } catch { /* non-fatal */ }
+
     let systemMessage: string;
     if (context && context !== 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.') {
       // 18.2: Phase label statt binary Learning Mode
@@ -79,6 +86,12 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
       }
       if (prediction) {
         systemMessage += `## Erwartung\nWahrscheinliches Thema: ${prediction.expected_topic} (${Math.round(prediction.confidence * 100)}%)\n\n`;
+      }
+      if (dueReminders.length > 0) {
+        const reminderBlock = dueReminders
+          .map(m => `- ${m.node.content}`)
+          .join('\n');
+        systemMessage += `## Erinnerungen\n${reminderBlock}\n\n`;
       }
       systemMessage += context;
     } else {

@@ -32,6 +32,10 @@ export interface NodeMetadata {
   needs_confirmation?: boolean;
   hub_protected?: boolean;
   hub_edge_count?: number;
+  // V6: Prospective Memory
+  trigger_date?: number;
+  trigger_type?: 'time' | 'event' | 'both';
+  dismissed?: boolean;
 }
 
 export interface Node {

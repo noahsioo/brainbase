@@ -1,6 +1,7 @@
 import type { LLMClient } from '../llm/types.js';
 import { addNode, searchNodes, getNodes, type Node } from '../memory/store.js';
 import { autoLinkNodes } from '../memory/activation.js';
+import { createProspectiveMemory } from '../memory/prospective.js';
 
 export interface TaskExtractionResult {
   tasks_created: number;
@@ -111,10 +112,53 @@ export async function extractTasks(
     });
 
     autoLinkNodes(node.id);
+
+    // V6-7: Tasks mit Deadline → Prospective Memory Bridge
+    if (task.deadline && task.deadline !== 'someday') {
+      const triggerDate = deadlineToTimestamp(task.deadline);
+      const words = task.description.split(/\s+/)
+        .filter(w => w.length > 3)
+        .map(w => w.toLowerCase())
+        .slice(0, 3);
+
+      createProspectiveMemory(task.description, words, {
+        importance,
+        source: `task-bridge:${sessionId}`,
+        trigger_date: triggerDate,
+        trigger_type: 'both',
+      });
+    }
+
     result.tasks_created++;
   }
 
   return result;
+}
+
+function deadlineToTimestamp(deadline: string): number {
+  const now = new Date();
+  switch (deadline) {
+    case 'today': {
+      const eod = new Date(now);
+      eod.setHours(18, 0, 0, 0);
+      return eod.getTime();
+    }
+    case 'tomorrow': {
+      const tmr = new Date(now);
+      tmr.setDate(tmr.getDate() + 1);
+      tmr.setHours(9, 0, 0, 0);
+      return tmr.getTime();
+    }
+    case 'this_week': {
+      const fri = new Date(now);
+      const daysUntilFri = (5 - fri.getDay() + 7) % 7 || 7;
+      fri.setDate(fri.getDate() + daysUntilFri);
+      fri.setHours(9, 0, 0, 0);
+      return fri.getTime();
+    }
+    default:
+      return Date.now() + 7 * 24 * 60 * 60 * 1000;
+  }
 }
 
 function isSimilarTask(a: string, b: string): boolean {
