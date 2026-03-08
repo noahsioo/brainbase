@@ -1339,6 +1339,12 @@ function buildTaskReminderSlot(budget: number, sessionId?: string): string {
   return truncateToTokens(text, budget);
 }
 
+function shouldShowLocalTaskReminder(sessionId: string | undefined, taskMode?: string): boolean {
+  if (!sessionId) return false;
+  if (taskMode === 'chatting') return false;
+  return getOpenTasks(sessionId).length > 0;
+}
+
 // ── Ghost Context (unchanged) ───────────────────────────────
 
 function buildGhostContextSlot(budget: number, currentTopic?: string): string {
@@ -2017,6 +2023,13 @@ export function generateContext(
   const workingMemory = buildWorkingMemorySlot(workingMemoryBudget, sessionId);
   if (workingMemory) sections.push(workingMemory);
 
+  const localTaskReminderBudget = Math.max(120, budget.sessionMomentum);
+  const shouldShowTasksEarly = shouldShowLocalTaskReminder(sessionId, effectiveTaskMode);
+  if (shouldShowTasksEarly) {
+    const taskReminder = buildTaskReminderSlot(localTaskReminderBudget, sessionId);
+    if (taskReminder) sections.push(taskReminder);
+  }
+
   // M24: Frustrated → failure warnings FIRST and ALWAYS
   // 13.3: Debugging → also show failures first (task-driven, not mood-driven)
   if ((effectiveCurrentMood === 'frustrated' || effectiveTaskMode === 'debugging') && currentTopic) {
@@ -2057,7 +2070,7 @@ export function generateContext(
     const ghostCtx = buildGhostContextSlot(budget.extras, currentTopic);
     if (ghostCtx) sections.unshift(ghostCtx);
 
-    if (sessionPhaseProfile.showSessionMomentum) {
+    if (sessionPhaseProfile.showSessionMomentum && !shouldShowTasksEarly) {
       const taskReminder = buildTaskReminderSlot(budget.sessionMomentum, sessionId);
       if (taskReminder) sections.push(taskReminder);
     }
