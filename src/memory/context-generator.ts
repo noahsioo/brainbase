@@ -248,7 +248,18 @@ function getActiveContextNodeScore(
   mood?: string,
   sessionFeedback = new Map<string, SessionContextFeedbackEntry>(),
 ): number {
-  const baseSignal = Math.max(node.activation || 0, (node.importance || 0) * 0.35);
+  const activation = node.activation || 0;
+  const importance = node.importance || 0;
+  const semanticScore = getSemanticRelevanceScore(node);
+
+  let baseSignal: number;
+  if (semanticScore > 0.1) {
+    const normalizedActivation = Math.min(1, activation);
+    baseSignal = 0.60 * semanticScore + 0.30 * normalizedActivation + 0.10 * importance;
+  } else {
+    baseSignal = Math.max(activation, importance * 0.35);
+  }
+
   const feedbackMultiplier = getContextFeedbackMultiplier(node, sessionFeedback);
   const repeatPenalty = getContextRepeatPenalty(node, history);
 
@@ -259,6 +270,53 @@ function getActiveContextNodeScore(
   }
 
   return baseSignal * feedbackMultiplier * repeatPenalty * moodBias;
+}
+
+function getSemanticRelevanceScore(node: Node): number {
+  const nodeVec = getEmbedding(node.id);
+  if (!nodeVec) return 0;
+
+  let best = 0;
+
+  if (_sessionMessageVec) {
+    best = Math.max(best, cosineSimilarity(nodeVec, _sessionMessageVec));
+  }
+
+  if (_sessionTopicVec) {
+    const topicSim = cosineSimilarity(nodeVec, _sessionTopicVec);
+    best = Math.max(best, topicSim * 0.85);
+  }
+
+  return best;
+}
+
+function getSemanticCandidateNodes(limit: number): Node[] {
+  if (!_sessionMessageVec && !_sessionTopicVec) return [];
+
+  const queryVec = _sessionMessageVec || _sessionTopicVec;
+  if (!queryVec) return [];
+
+  const allEmbeddings = getEmbeddingCache();
+  if (allEmbeddings.size === 0) return [];
+
+  const scored: Array<{ node_id: string; score: number }> = [];
+  for (const [nodeId, vec] of allEmbeddings.entries()) {
+    const sim = cosineSimilarity(queryVec, vec);
+    if (sim > 0.25) {
+      scored.push({ node_id: nodeId, score: sim });
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const topIds = scored.slice(0, limit);
+
+  const nodes: Node[] = [];
+  for (const { node_id } of topIds) {
+    const node = getNode(node_id);
+    if (node) nodes.push(node);
+  }
+
+  return nodes;
 }
 
 function getContextFeedbackMultiplier(
