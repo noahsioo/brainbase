@@ -1352,14 +1352,32 @@ function shouldShowLocalTaskReminder(sessionId: string | undefined, taskMode?: s
 
 // ── Ghost Context (unchanged) ───────────────────────────────
 
-function buildGhostContextSlot(budget: number, currentTopic?: string): string {
+function buildGhostContextSlot(
+  budget: number,
+  currentTopic: string | undefined,
+  topicExpertise: number,
+  sessionPhase: SessionPhaseBudgetProfile['phase'],
+): string {
   if (!currentTopic) return '';
-  const ghost = buildGhostContext(currentTopic);
+  const hasStrongExpertiseSignal = topicExpertise < 0.4 || topicExpertise > 0.7;
+  if (!hasStrongExpertiseSignal) {
+    return '';
+  }
+
+  if (sessionPhase === 'bootstrap' && topicExpertise > 0.7) {
+    return '';
+  }
+
+  const ghost = buildGhostContext(currentTopic, topicExpertise);
   if (!ghost) return '';
 
   let text = `## Expertise-Hinweis\n- ${ghost}\n`;
 
   // M33: Metacognition — show open knowledge gaps for this topic
+  if (sessionPhase !== 'deep') {
+    return truncateToTokens(text, budget);
+  }
+
   const gaps = getOpenGaps();
   const topicLower = currentTopic.toLowerCase();
   const relevantGaps = gaps.filter(g =>
@@ -1378,8 +1396,8 @@ function buildGhostContextSlot(budget: number, currentTopic?: string): string {
 
 // ── Failure Warning (unchanged) ─────────────────────────────
 
-function buildFailureWarningSlot(budget: number, topic: string): string {
-  const failures = getRelevantFailures(topic);
+function buildFailureWarningSlot(budget: number, topic: string, sessionId?: string): string {
+  const failures = getRelevantFailures(topic, sessionId);
   if (failures.length === 0) return '';
 
   let text = '## Vorsicht\n';
@@ -2038,7 +2056,7 @@ export function generateContext(
   // M24: Frustrated → failure warnings FIRST and ALWAYS
   // 13.3: Debugging → also show failures first (task-driven, not mood-driven)
   if ((effectiveCurrentMood === 'frustrated' || effectiveTaskMode === 'debugging') && currentTopic) {
-    const failureWarning = buildFailureWarningSlot(budget.extras, currentTopic);
+    const failureWarning = buildFailureWarningSlot(budget.extras, currentTopic, sessionId);
     if (failureWarning) sections.push(failureWarning);
   }
 
@@ -2072,7 +2090,7 @@ export function generateContext(
   }
 
   if (effectiveMode === 'MAXIMUM' || effectiveMode === 'STANDARD') {
-    const ghostCtx = buildGhostContextSlot(budget.extras, currentTopic);
+    const ghostCtx = buildGhostContextSlot(budget.extras, currentTopic, topicExpertise, sessionPhaseProfile.phase);
     if (ghostCtx) sections.unshift(ghostCtx);
 
     if (sessionPhaseProfile.showSessionMomentum && !shouldShowTasksEarly) {
@@ -2082,7 +2100,7 @@ export function generateContext(
 
     // Failure warning already added at top for frustrated/debugging — skip duplicate
     if (currentTopic && effectiveCurrentMood !== 'frustrated' && effectiveTaskMode !== 'debugging') {
-      const failureWarning = buildFailureWarningSlot(budget.extras, currentTopic);
+      const failureWarning = buildFailureWarningSlot(budget.extras, currentTopic, sessionId);
       if (failureWarning) sections.push(failureWarning);
     }
 

@@ -1,5 +1,5 @@
 import { addToRawBuffer, createSession, getDb, getNode, getSession, updateNode, setQueryEmbedding } from '../memory/store.js';
-import { activateByQuery, activateByConversation, primeActivations, applySTDP, getCurrentlyActivatedEntityIds, getLastSTDPEntities, setLastSTDPEntities, setCurrentEncodingContext, setSystemMode, setCurrentTaskMode, applyDisinhibition, clearDisinhibitionTargets, startNewCoherenceRound, getSessionActivationValue, setSessionActivationValue } from '../memory/activation.js';
+import { activateByQuery, activateByConversation, primeActivations, applySTDP, getCurrentlyActivatedEntityIds, getLastSTDPEntities, setLastSTDPEntities, setCurrentEncodingContext, setSystemMode, setCurrentTaskMode, applyDisinhibition, clearDisinhibitionTargets, startNewCoherenceRound, getSessionActivationValue, setSessionActivationValue, getActivatedNodes } from '../memory/activation.js';
 import { generateContext, setSessionTopicEmbedding, type DetailMode } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
 import { getConfig } from '../config.js';
@@ -35,7 +35,7 @@ import { shouldAllowLLMCall } from '../regulation/energy.js';
 import { analyzeEnvironment } from '../senses/environment-sense.js';
 import { integrateSenses } from '../senses/integration.js';
 import { recordContextModeDelivery } from '../learning/communication-learner.js';
-import { inferMessageIntent, updateWorkingMemory } from '../memory/working-memory.js';
+import { inferMessageIntent, updateWorkingMemory, getWorkingMemory } from '../memory/working-memory.js';
 import {
   setSessionAttentionState,
   setSessionContextSignal,
@@ -44,6 +44,7 @@ import {
   setSessionTaskMode as setRuntimeTaskMode,
   setSessionTone,
 } from '../memory/session-runtime-state.js';
+import { diagnosticLog } from '../utils/diagnostic.js';
 
 interface UserPromptInput {
   session_id?: string;
@@ -290,6 +291,13 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   const emotionBypass = detectEmotionBypass(input.message);
 
   const signal = processThalamic(input.message, sessionId, { readOnly: !shouldPersistState });
+  diagnosticLog('THAL', {
+    combined: signal.combined,
+    action: signal.action,
+    entities: signal.entities.slice(0, 5),
+    taskMode: signal.taskMode,
+    mode: signal.mode,
+  });
   // M52: Gehirnwellen — set system mode for activation parameter modulation
   if (shouldPersistState) {
     setSystemMode(deriveSystemMode(signal.mode, signal.salienceMode), sessionId);
@@ -610,6 +618,15 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     }
   }
 
+  // Diagnostic: activated nodes after activation
+  {
+    const activatedForLog = getActivatedNodes(5, sessionId);
+    diagnosticLog('ACTV', {
+      top5: activatedForLog.map(n => `${n.content}(${n.activation.toFixed(2)})`),
+      totalActivated: getActivatedNodes(50, sessionId).length,
+    });
+  }
+
   // 23.1: Disinhibition Cleanup
   if (shouldPersistState) {
     clearDisinhibitionTargets(sessionId);
@@ -648,6 +665,12 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       }
     }
   }
+  diagnosticLog('WATCH', {
+    hasResponse: !!watcherResponse,
+    nothing_new: (watcherResponse?.semantic as Record<string, unknown>)?.nothing_new ?? 'N/A',
+    topic: (watcherResponse?.semantic as Record<string, unknown>)?.topic ?? 'N/A',
+    systemMessage: !!watcherResponse?.systemMessage,
+  });
 
   const effectiveSemantic = buildSemanticExtraction({
     message: input.message,
@@ -664,6 +687,12 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     provisionalFocusEntities,
   );
   const effectiveIntent = resolveEffectiveIntent(effectiveSemantic, input.message);
+  diagnosticLog('RESOLVE', {
+    effectiveTopic,
+    effectiveEntities,
+    effectiveIntent,
+    semanticSource: effectiveSemantic.source,
+  });
 
   if (shouldPersistState) {
     writeSemanticExtractionState(sessionId, effectiveSemantic);
@@ -678,6 +707,15 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       degradedSemantic: effectiveSemantic.degraded,
       taskMode: signal.taskMode,
       mood,
+    });
+  }
+  {
+    const wmForLog = getWorkingMemory(sessionId);
+    diagnosticLog('WM', {
+      topic: wmForLog?.current_topic,
+      entities: Object.entries(wmForLog?.active_entities || {}).slice(0, 5),
+      intent: wmForLog?.last_message_intent,
+      summary: wmForLog?.conversation_summary?.slice(0, 100),
     });
   }
 

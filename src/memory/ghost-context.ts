@@ -20,10 +20,12 @@ export function calculateExpertise(topic: string): number {
   return density;
 }
 
-export function buildGhostContext(topic: string): string {
+export function buildGhostContext(topic: string, expertiseOverride?: number): string {
   if (!topic || topic.length < 2) return '';
 
-  const level = calculateExpertise(topic);
+  const level = typeof expertiseOverride === 'number'
+    ? Math.max(0, Math.min(1, expertiseOverride))
+    : calculateExpertise(topic);
 
   if (level < 0.2) {
     return `User hat wenig Erfahrung mit ${topic}. Erklaere Konzepte, nutze Analogien.`;

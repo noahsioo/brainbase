@@ -1,4 +1,5 @@
 import { getDb, addNode, getNodes, updateNode, type Node } from './store.js';
+import { getActivatedNodes } from './activation.js';
 import { autoLinkNodes } from './activation.js';
 
 export interface ProspectiveMatch {
@@ -58,13 +59,14 @@ export function dismissProspectiveMemory(nodeId: string): void {
 export function trackFailure(message: string, sessionId: string): Node | null {
   const db = getDb();
 
-  // Get recently activated nodes as context for what went wrong
-  const recentNodes = db.prepare(`
-    SELECT content, type FROM nodes
-    WHERE last_activated > ? AND activation > 0.1
-    AND type NOT IN ('core', 'system_knowledge', 'failure')
-    ORDER BY activation DESC LIMIT 5
-  `).all(Date.now() - 5 * 60 * 1000) as Array<{ content: string; type: string }>;
+  // Use session-local activation as the live source of what just mattered.
+  const recentNodes = getActivatedNodes(10, sessionId)
+    .filter(node =>
+      node.activation > 0.1 &&
+      !['core', 'system_knowledge', 'failure'].includes(node.type),
+    )
+    .slice(0, 5)
+    .map(node => ({ content: node.content, type: node.type }));
 
   if (recentNodes.length === 0) return null;
 
@@ -91,11 +93,15 @@ export function trackFailure(message: string, sessionId: string): Node | null {
   return node;
 }
 
-export function getRelevantFailures(message: string, limit = 3): Node[] {
+export function getRelevantFailures(message: string, sessionId?: string, limit = 3): Node[] {
   const db = getDb();
-  const failureNodes = db.prepare(
-    "SELECT * FROM nodes WHERE type = 'failure' ORDER BY created_at DESC LIMIT 20"
-  ).all() as Node[];
+  const failureNodes = sessionId
+    ? db.prepare(
+        "SELECT * FROM nodes WHERE type = 'failure' AND source = ? ORDER BY created_at DESC LIMIT 20"
+      ).all(`failure-tracker:${sessionId}`) as Node[]
+    : db.prepare(
+        "SELECT * FROM nodes WHERE type = 'failure' ORDER BY created_at DESC LIMIT 20"
+      ).all() as Node[];
 
   if (failureNodes.length === 0) return [];
 
