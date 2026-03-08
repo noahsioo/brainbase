@@ -1,6 +1,6 @@
 import { addToRawBuffer, createSession, getDb, getNode, getSession, updateNode, setQueryEmbedding } from '../memory/store.js';
 import { activateByQuery, activateByConversation, primeActivations, applySTDP, getCurrentlyActivatedEntityIds, getLastSTDPEntities, setLastSTDPEntities, setCurrentEncodingContext, setSystemMode, setCurrentTaskMode, applyDisinhibition, clearDisinhibitionTargets, startNewCoherenceRound, getSessionActivationValue, setSessionActivationValue, getActivatedNodes } from '../memory/activation.js';
-import { generateContext, setSessionTopicEmbedding, type DetailMode } from '../memory/context-generator.js';
+import { generateContext, setSessionTopicEmbedding, setSessionMessageEmbedding, type DetailMode } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
 import { getConfig } from '../config.js';
 import { extractFromPrompt } from '../extraction/code-extractor.js';
@@ -735,6 +735,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       try {
         const queryVec = await embClient.embed(input.message);
         setQueryEmbedding(input.message, queryVec);
+        setSessionMessageEmbedding(queryVec);
         if (effectiveTopic) {
           const topicVec = await embClient.embed(effectiveTopic);
           setQueryEmbedding(effectiveTopic, topicVec);
@@ -744,10 +745,11 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
         }
       } catch {
         setSessionTopicEmbedding(null);
-        // Fallback to keyword search
+        setSessionMessageEmbedding(null);
       }
     } else {
       setSessionTopicEmbedding(null);
+      setSessionMessageEmbedding(null);
     }
   }
 

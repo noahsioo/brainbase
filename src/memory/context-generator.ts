@@ -903,10 +903,19 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
   const minActivation = 0.02 + tradeoffs.speed_accuracy * 0.08;
 
   const activated = getActivatedNodes(nodeLimit, sessionId);
+  const semanticCandidates = getSemanticCandidateNodes(nodeLimit);
 
-  let nodes = activated.filter(n => n.activation >= minActivation);
+  const candidateMap = new Map<string, Node>();
+  for (const node of activated) candidateMap.set(node.id, node);
+  for (const node of semanticCandidates) {
+    if (!candidateMap.has(node.id)) candidateMap.set(node.id, node);
+  }
+
+  let nodes = Array.from(candidateMap.values()).filter(n =>
+    n.activation >= minActivation || getSemanticRelevanceScore(n) > 0.2
+  );
   if (nodes.length === 0) {
-    nodes = activated;
+    nodes = Array.from(candidateMap.values());
   }
   if (nodes.length === 0) {
     nodes = getNodes({ minImportance: 0.6, limit: 15 });

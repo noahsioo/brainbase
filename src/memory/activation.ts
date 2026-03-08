@@ -13,6 +13,7 @@ import {
   getSessionActivationRows,
   upsertSessionActivation,
   deleteSessionActivations,
+  findEntityByName,
   type Node,
   type Edge,
   type SessionActivationRow,
@@ -1302,6 +1303,52 @@ export function activateByConversation(
     .slice(0, orientingBudget);
 
   return { activated: budgeted, edges: allEdges, inhibited: totalInhibited };
+}
+
+// ── Semantic Entity Activation (Phase 2: Two-Brain Fix) ──────
+
+export function activateByEntities(
+  entities: string[],
+  sessionId: string,
+): ActivationResult {
+  const allActivated: Map<string, Node> = new Map();
+  const allEdges: Edge[] = [];
+  let totalInhibited = 0;
+
+  for (const entityName of entities.slice(0, 7)) {
+    const entityNode = findEntityByName(entityName);
+    if (!entityNode) continue;
+
+    const result = activateNode(entityNode.id, 1.0, sessionId);
+    for (const n of result.activated) allActivated.set(n.id, n);
+    for (const e of result.edges) {
+      if (!allEdges.find(ex => ex.id === e.id)) allEdges.push(e);
+    }
+    totalInhibited += result.inhibited;
+  }
+
+  if (allActivated.size >= 2) {
+    boostCoActivatedCluster(Array.from(allActivated.keys()).slice(0, 15));
+  }
+
+  applyAntiHijack(allActivated, sessionId);
+  applyDivisiveNormalization(allActivated, sessionId);
+
+  const budgeted = Array.from(allActivated.values())
+    .sort((a, b) => b.activation - a.activation)
+    .slice(0, 20);
+
+  return { activated: budgeted, edges: allEdges, inhibited: totalInhibited };
+}
+
+export function applyAttentionSpotlight(sessionId: string, maxNodes = 10): void {
+  const rows = getSessionActivationRows(sessionId, 100, 0.01);
+  if (rows.length <= maxNodes) return;
+
+  const sorted = [...rows].sort((a, b) => b.activation - a.activation);
+  for (const row of sorted.slice(maxNodes)) {
+    upsertSessionActivation(sessionId, row.node_id, 0);
+  }
 }
 
 // ── Mechanism 18: STDP (Spike-Timing-Dependent Plasticity) ───

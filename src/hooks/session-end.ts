@@ -9,6 +9,7 @@ import { extractEntities, updateCounters, checkAutoNodeCreation } from '../signa
 import { clearScope } from '../memory/session-scope.js';
 import { deleteWorkingMemory, finalizeWorkingMemory } from '../memory/working-memory.js';
 import { clearSessionRuntimeState } from '../memory/session-runtime-state.js';
+import { setSessionTopicEmbedding, setSessionMessageEmbedding } from '../memory/context-generator.js';
 
 
 interface SessionEndInput {
@@ -67,6 +68,8 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
       deleteWorkingMemory(sessionId);
       clearSessionActivationOverlay(sessionId);
       clearSessionRuntimeState(sessionId);
+      setSessionTopicEmbedding(null);
+      setSessionMessageEmbedding(null);
       clearScope(sessionId);
       cleanupSessionState(sessionId);
     }
