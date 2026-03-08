@@ -1383,23 +1383,45 @@ function buildFailureWarningSlot(budget: number, topic: string): string {
 
 // ── Conflict Monitoring (M31) ────────────────────────────────
 
-function buildConflictSlot(budget: number): string {
-  const db = getDb();
+function getActiveContradictions(sessionId?: string, minActivation = 0.1): Array<{ src: string; tgt: string; score: number }> {
+  const activeNodes = getActivatedNodes(20, sessionId).filter(node => node.activation >= minActivation);
+  if (activeNodes.length === 0) return [];
 
-  const contradictions = db.prepare(`
-    SELECT n1.content as src, n2.content as tgt
-    FROM edges e
-    JOIN nodes n1 ON e.source_id = n1.id
-    JOIN nodes n2 ON e.target_id = n2.id
-    WHERE e.type = 'contradicts'
-    AND (n1.activation > 0.1 OR n2.activation > 0.1)
-    LIMIT 3
-  `).all() as Array<{ src: string; tgt: string }>;
+  const contradictions = new Map<string, { src: string; tgt: string; score: number }>();
+  const activeMap = new Map(activeNodes.map(node => [node.id, node]));
+
+  for (const node of activeNodes) {
+    const edges = getEdgesForNode(node.id);
+    for (const edge of edges) {
+      if (edge.type !== 'contradicts') continue;
+
+      const otherId = edge.source_id === node.id ? edge.target_id : edge.source_id;
+      const other = activeMap.get(otherId) ?? getNode(otherId);
+      if (!other) continue;
+
+      const score = Math.max(node.activation || 0, other.activation || 0, edge.strength || 0);
+      const key = [node.id, other.id].sort().join('::');
+      const src = node.content;
+      const tgt = other.content;
+      const existing = contradictions.get(key);
+      if (!existing || score > existing.score) {
+        contradictions.set(key, { src, tgt, score });
+      }
+    }
+  }
+
+  return [...contradictions.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
+}
+
+function buildConflictSlot(budget: number, sessionId?: string): string {
+  const contradictions = getActiveContradictions(sessionId, 0.1);
 
   if (contradictions.length === 0) return '';
 
   let text = '## Hinweis: Widersprueche\n';
-  for (const c of contradictions) {
+  for (const c of contradictions.slice(0, 3)) {
     const line = `- "${c.src}" vs "${c.tgt}"\n`;
     if (estimateTokens(text + line) > budget) break;
     text += line;
@@ -1409,35 +1431,32 @@ function buildConflictSlot(budget: number): string {
 
 // ── 25.2: Counter-Evidence — aktive Gegensuche ──────────────
 
-function buildCounterEvidenceSlot(budget: number): string {
+function buildCounterEvidenceSlot(budget: number, sessionId?: string): string {
   if (budget < 20) return '';
-  const db = getDb();
-
-  const topNodes = db.prepare(
-    "SELECT id, content FROM nodes WHERE activation > 0.3 ORDER BY activation DESC LIMIT 5"
-  ).all() as Array<{ id: string; content: string }>;
+  const topNodes = getActivatedNodes(10, sessionId)
+    .filter(node => node.activation > 0.3)
+    .slice(0, 5);
 
   if (topNodes.length === 0) return '';
 
-  const counterEvidence: string[] = [];
+  const counterEvidence = new Set<string>();
   for (const node of topNodes) {
-    const contradicting = db.prepare(`
-      SELECT n.content FROM edges e
-      JOIN nodes n ON (CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END) = n.id
-      WHERE (e.source_id = ? OR e.target_id = ?) AND e.type = 'contradicts'
-      AND n.confidence >= 0.3
-      LIMIT 2
-    `).all(node.id, node.id, node.id) as Array<{ content: string }>;
-
-    for (const c of contradicting) {
-      counterEvidence.push(c.content);
+    const edges = getEdgesForNode(node.id);
+    for (const edge of edges) {
+      if (edge.type !== 'contradicts') continue;
+      const otherId = edge.source_id === node.id ? edge.target_id : edge.source_id;
+      const other = getNode(otherId);
+      if (!other || other.confidence < 0.3) continue;
+      counterEvidence.add(other.content);
+      if (counterEvidence.size >= 4) break;
     }
+    if (counterEvidence.size >= 4) break;
   }
 
-  if (counterEvidence.length === 0) return '';
+  if (counterEvidence.size === 0) return '';
 
   return truncateToTokens(
-    `## Aber beachte\n${counterEvidence.slice(0, 2).map(c => `- ${c}`).join('\n')}\n`,
+    `## Aber beachte\n${[...counterEvidence].slice(0, 2).map(c => `- ${c}`).join('\n')}\n`,
     budget
   );
 }
@@ -2050,11 +2069,11 @@ export function generateContext(
     }
 
     // M31: Conflict Monitoring — show active contradictions
-    const conflicts = buildConflictSlot(budget.extras);
+    const conflicts = buildConflictSlot(budget.extras, sessionId);
     if (conflicts) sections.push(conflicts);
 
     // 25.2: Counter-Evidence — aktive Gegensuche gegen Confirmation Bias
-    const counterEvidence = buildCounterEvidenceSlot(budget.extras);
+    const counterEvidence = buildCounterEvidenceSlot(budget.extras, sessionId);
     if (counterEvidence) sections.push(counterEvidence);
 
     const metaInsight = buildMetaInsightSlot(
