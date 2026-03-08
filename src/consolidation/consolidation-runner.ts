@@ -534,6 +534,61 @@ function nestedNremPhase(): {
   return { pruning, merge, chunking, abstraction };
 }
 
+export async function runLightConsolidation(): Promise<{ nodes_pruned: number; nodes_merged: number }> {
+  const db = getDb();
+  let pruned = 0;
+
+  const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const fiveDaysAgo = Date.now() - 5 * 24 * 60 * 60 * 1000;
+
+  // 1. Low-confidence + low-activation nodes older than 3 days
+  const pruneCandidates = db.prepare(`
+    SELECT id FROM nodes
+    WHERE confidence < 0.35
+    AND activation_count < 3
+    AND created_at < ?
+    AND type NOT IN ('entity', 'identity', 'core')
+  `).all(threeDaysAgo) as Array<{ id: string }>;
+
+  for (const { id } of pruneCandidates) {
+    db.prepare('DELETE FROM edges WHERE source_id = ? OR target_id = ?').run(id, id);
+    db.prepare('DELETE FROM nodes WHERE id = ?').run(id);
+    pruned++;
+  }
+
+  // 2. Single-mention nodes without confirmation older than 5 days
+  const singleMention = db.prepare(`
+    SELECT id FROM nodes
+    WHERE evidence_count <= 1
+    AND created_at < ?
+    AND type NOT IN ('entity', 'identity', 'core', 'example')
+    AND importance < 0.7
+  `).all(fiveDaysAgo) as Array<{ id: string }>;
+
+  for (const { id } of singleMention) {
+    db.prepare('DELETE FROM edges WHERE source_id = ? OR target_id = ?').run(id, id);
+    db.prepare('DELETE FROM nodes WHERE id = ?').run(id);
+    pruned++;
+  }
+
+  // 3. Orphan entities (no edges) older than 3 days
+  const orphans = db.prepare(`
+    SELECT n.id FROM nodes n
+    LEFT JOIN edges e ON n.id = e.source_id OR n.id = e.target_id
+    WHERE e.id IS NULL
+    AND n.created_at < ?
+    AND n.type = 'entity'
+    AND n.activation_count < 3
+  `).all(threeDaysAgo) as Array<{ id: string }>;
+
+  for (const { id } of orphans) {
+    db.prepare('DELETE FROM nodes WHERE id = ?').run(id);
+    pruned++;
+  }
+
+  return { nodes_pruned: pruned, nodes_merged: 0 };
+}
+
 export async function runConsolidation(client?: LLMClient): Promise<ConsolidationResult> {
   const start = Date.now();
 

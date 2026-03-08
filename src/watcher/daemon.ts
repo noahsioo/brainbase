@@ -221,7 +221,7 @@ export async function startDaemon(): Promise<void> {
   });
 
   // M41: Active Consolidation: check every hour, run if 6h+ since last (like sleep cycles)
-  const CONSOLIDATION_INTERVAL = 6 * 60 * 60 * 1000;
+  const CONSOLIDATION_INTERVAL = 3 * 60 * 60 * 1000;
   setInterval(async () => {
     try {
       const lastConsolidation = getLastConsolidation();

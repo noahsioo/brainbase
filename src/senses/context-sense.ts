@@ -2,7 +2,9 @@
 // Somatosensorik = Koerperschema. Fuer uns: System-Schema
 // Weiss: welcher Provider, welche Session-Laenge, welche Tageszeit, welches Projekt
 
-import { getDb } from '../memory/store.js';
+import { getActivatedNodes } from '../memory/activation.js';
+import { getDb, type Node, type NodeMetadata } from '../memory/store.js';
+import { getWorkingMemory } from '../memory/working-memory.js';
 
 export interface ContextSignal {
   provider: string;
@@ -28,6 +30,54 @@ function getDayType(): ContextSignal['dayType'] {
   return (day === 0 || day === 6) ? 'weekend' : 'weekday';
 }
 
+function getEntityType(node: Node): string | null {
+  if (!node.metadata) return null;
+  try {
+    const metadata = JSON.parse(node.metadata) as NodeMetadata;
+    return typeof metadata.entity_type === 'string' ? metadata.entity_type : null;
+  } catch {
+    return null;
+  }
+}
+
+function getSessionActivatedProject(sessionId: string): string | null {
+  const activatedNodes = getActivatedNodes(20, sessionId);
+  for (const node of activatedNodes) {
+    if (node.type !== 'entity') continue;
+    const entityType = getEntityType(node);
+    if (entityType === 'project' || entityType === 'tool') {
+      return node.content;
+    }
+  }
+  return null;
+}
+
+function getWorkingMemoryProject(sessionId: string): string | null {
+  const memory = getWorkingMemory(sessionId);
+  if (!memory) return null;
+
+  const topEntity = Object.entries(memory.active_entities)
+    .sort((a, b) => b[1] - a[1])[0];
+
+  return topEntity?.[0] ?? null;
+}
+
+function getSessionFocusProject(sessionId: string): string | null {
+  const db = getDb();
+  const focusRow = db.prepare("SELECT value FROM system_state WHERE key = ?")
+    .get(`session_focus_${sessionId}`) as { value: string } | undefined;
+  if (!focusRow) return null;
+
+  try {
+    const focusMap = JSON.parse(focusRow.value) as Record<string, number>;
+    const topEntity = Object.entries(focusMap)
+      .sort((a, b) => b[1] - a[1])[0];
+    return topEntity?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function analyzeContext(sessionId: string, provider: string): ContextSignal {
   const db = getDb();
 
@@ -45,31 +95,10 @@ export function analyzeContext(sessionId: string, provider: string): ContextSign
     }
   } catch { /* new session */ }
 
-  // Current project: most recent entity of type 'project' or 'tool'
-  let currentProject: string | null = null;
-  try {
-    const projectNode = db.prepare(`
-      SELECT content FROM nodes
-      WHERE type = 'entity'
-      AND metadata LIKE '%"entity_type":"project"%'
-      AND activation > 0.1
-      ORDER BY last_activated DESC LIMIT 1
-    `).get() as { content: string } | undefined;
-
-    if (projectNode) {
-      currentProject = projectNode.content;
-    } else {
-      // Fallback: check session focus
-      const focusRow = db.prepare("SELECT value FROM system_state WHERE key = ?")
-        .get(`session_focus_${sessionId}`) as { value: string } | undefined;
-      if (focusRow) {
-        const focusMap: Record<string, number> = JSON.parse(focusRow.value);
-        const topEntity = Object.entries(focusMap)
-          .sort((a, b) => b[1] - a[1])[0];
-        if (topEntity) currentProject = topEntity[0];
-      }
-    }
-  } catch { /* no project */ }
+  // Current project: session-local activation first, then local memory/focus.
+  const currentProject = getSessionActivatedProject(sessionId)
+    ?? getWorkingMemoryProject(sessionId)
+    ?? getSessionFocusProject(sessionId);
 
   const isNewSession = sessionLength <= 2;
   const isDeepSession = sessionLength >= 10 && sessionAge >= 10;

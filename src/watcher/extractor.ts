@@ -273,7 +273,7 @@ export async function extractFromMessageDetailed(
   flags?: KeywordFlags,
 ): Promise<MessageExtractionResult> {
   if (!isSubstantiveMessage(message)) {
-    recordLLMCall(sessionId);
+    recordLLMCall(sessionId, 0);
     return {
       nodes: [],
       semantic: {

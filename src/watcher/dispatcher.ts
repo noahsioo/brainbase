@@ -396,6 +396,15 @@ export async function dispatchSessionEnd(
       }
     }
 
+    // Light consolidation at session end (pruning only, no LLM)
+    try {
+      const { runLightConsolidation } = await import('../consolidation/consolidation-runner.js');
+      const consolidationResult = await runLightConsolidation();
+      log(`Session-End consolidation: ${consolidationResult.nodes_pruned} pruned, ${consolidationResult.nodes_merged} merged`);
+    } catch (err) {
+      log(`Session-End consolidation failed: ${err}`);
+    }
+
     return { ok: true, nodesExtracted: true };
   } finally {
     resetDispatcherState(sessionId);
