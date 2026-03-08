@@ -717,10 +717,18 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   if (shouldPersistState) {
     const fokSignal = detectFeelingOfKnowing(effectiveTopic);
     if (fokSignal) {
+      if (sessionId) {
+        getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+          .run(`fok_signal_${sessionId}`, JSON.stringify(fokSignal), Date.now());
+      }
       getDb().prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
         .run('fok_signal', JSON.stringify(fokSignal), Date.now());
     } else {
-      getDb().prepare("DELETE FROM system_state WHERE key = 'fok_signal'").run();
+      if (sessionId) {
+        getDb().prepare("DELETE FROM system_state WHERE key = ?").run(`fok_signal_${sessionId}`);
+      } else {
+        getDb().prepare("DELETE FROM system_state WHERE key = 'fok_signal'").run();
+      }
     }
   }
 
