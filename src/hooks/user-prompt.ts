@@ -24,6 +24,7 @@ import { analyzeContext } from '../senses/context-sense.js';
 import { detectFeelingOfKnowing, calculateAttentionState } from '../meta/metacognition.js';
 import { getSystemMood } from '../senses/interoception.js';
 import { shouldAllowLLMCall } from '../regulation/energy.js';
+import { calculateStressLevel } from '../regulation/stress-response.js';
 import { recordContextModeDelivery } from '../learning/communication-learner.js';
 import { inferMessageIntent, updateWorkingMemory, getWorkingMemory } from '../memory/working-memory.js';
 import {
@@ -393,6 +394,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   const contextSignal = analyzeContext(sessionId, provider);
   if (shouldPersistState) {
     setSessionContextSignal(sessionId, contextSignal);
+    calculateStressLevel(sessionId);
   }
 
   // M36: Set encoding context for retrieval matching in activation

@@ -2139,7 +2139,7 @@ export function generateContext(
   }
 
   // 21.5: Stress-Response — unter Stress weniger kreativ, nur bewaehrte Pfade
-  const stressLevel = getStressLevel();
+  const stressLevel = getStressLevel(sessionId);
   if (stressLevel === 'stressed') {
     budget.serendipity = 0;
     budget.extras = Math.round(budget.extras * 0.5);
