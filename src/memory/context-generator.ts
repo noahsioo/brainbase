@@ -18,6 +18,7 @@ import { savePrediction } from '../regulation/comparator.js';
 import { getStressLevel } from '../regulation/stress-response.js';
 import { getTradeoffState } from '../regulation/tradeoffs.js';
 import { getWorkingMemory } from './working-memory.js';
+import { generateSpecificImpulse, type HungerZone } from './knowledge-hunger.js';
 import {
   getSessionAttentionState,
   getSessionContextSignal,
@@ -1922,6 +1923,24 @@ function buildExamplesSlot(budget: number, topic?: string, sessionId?: string): 
   return truncateToTokens(text, budget);
 }
 
+// ── Knowledge Hunger (V7) ────────────────────────────────────
+
+function buildHungerSlot(sessionId?: string): string {
+  if (!sessionId) return '';
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT value FROM system_state WHERE key = ?')
+      .get(`hunger_zones_${sessionId}`) as { value: string } | undefined;
+    if (!row) return '';
+    const zones = JSON.parse(row.value) as HungerZone[];
+    if (zones.length === 0) return '';
+    const topZone = zones[0];
+    const impulse = generateSpecificImpulse(topZone.entity, topZone.entity_id);
+    if (!impulse) return '';
+    return `\n[Wissensluecke: ${impulse}]\n`;
+  } catch { return ''; }
+}
+
 // ── Tip-of-the-Tongue (M50) ─────────────────────────────────
 
 function buildTipOfTongueSlot(budget: number, sessionTopic?: string, sessionId?: string): string {
@@ -2266,6 +2285,9 @@ export function generateContext(
 
     const counterEvidence = buildCounterEvidenceSlot(budget.extras, sessionId);
     if (counterEvidence) sections.push(counterEvidence);
+
+    const hungerHint = buildHungerSlot(sessionId);
+    if (hungerHint) sections.push(hungerHint);
 
     const metaInsight = buildMetaInsightSlot(
       budget.extras,

@@ -11,6 +11,7 @@ import { runConsolidation, getLastConsolidation } from '../consolidation/consoli
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { initWorkingMemory } from '../memory/working-memory.js';
 import { checkProspectiveTriggers } from '../memory/prospective.js';
+import { getOpenTasks } from '../watcher/task-watcher.js';
 
 interface SessionStartInput {
   session_id?: string;
@@ -151,13 +152,12 @@ function getLastSessionSummary(): string | null {
       }
     }
 
-    // Open tasks
-    const openTasks = db.prepare(
-      "SELECT content FROM nodes WHERE type = 'task' AND (emotional_tag IS NULL OR emotional_tag != 'done') ORDER BY importance DESC LIMIT 3"
-    ).all() as Array<{ content: string }>;
+    const openTasks = getOpenTasks(lastSession.id)
+      .slice(0, 3)
+      .map(task => task.content);
 
     if (openTasks.length > 0) {
-      parts.push(`Offene Tasks: ${openTasks.map(t => t.content).join('; ')}`);
+      parts.push(`Offene Tasks aus letzter Session: ${openTasks.join('; ')}`);
     }
 
     return parts.join('\n');

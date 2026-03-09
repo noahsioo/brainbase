@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getDb, addNode, addEdge, getEmbedding, getEdgeBetween } from '../memory/store.js';
 import { cosineSimilarity } from '../llm/embeddings.js';
-import { pruneGraph, type PruningResult } from './pruning.js';
+import { pruneGraph, archiveNode, type PruningResult } from './pruning.js';
 import { mergeNodes, type MergeResult } from './merger.js';
 import { buildAbstractions, type AbstractionResult } from './abstraction-builder.js';
 import { dreamPhase, type DreamResult } from './dreamer.js';

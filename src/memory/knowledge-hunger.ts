@@ -1,5 +1,8 @@
-import { getDb, getAllEntities, getEdgesForNode, getNode, getSessionActivationRows, type Node } from './store.js';
-import type { FOKSignal } from '../meta/metacognition.js';
+// V7: Knowledge Hunger v2 — smarte Wissensluecken-Erkennung
+// Statt generischer "wir wissen nichts" Impulse → spezifische Fragen basierend auf Graph-Struktur
+// Laeuft nur conditional (Topic-Change, neue Entity, Cooldown)
+
+import { getDb, getAllEntities, getEdgesForNode, getNode, getSessionActivationRows, type Node, type Edge } from './store.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -14,29 +17,6 @@ export interface HungerZone {
 
 function getHungerZonesKey(sessionId?: string): string {
   return sessionId ? `hunger_zones_${sessionId}` : 'hunger_zones';
-}
-
-function getFokSignalKeys(sessionId?: string): string[] {
-  return sessionId ? [`fok_signal_${sessionId}`, 'fok_signal'] : ['fok_signal'];
-}
-
-function readFokSignal(sessionId?: string): FOKSignal | null {
-  const db = getDb();
-
-  for (const key of getFokSignalKeys(sessionId)) {
-    try {
-      const row = db.prepare('SELECT value FROM system_state WHERE key = ?')
-        .get(key) as { value: string } | undefined;
-      if (!row) continue;
-
-      const parsed = JSON.parse(row.value) as FOKSignal;
-      if (parsed && typeof parsed.topic === 'string') return parsed;
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
 }
 
 function getSessionEntityCandidates(
@@ -68,43 +48,13 @@ function getIgnoreCount(entityId: string): number {
   return ignoreRow ? parseInt(ignoreRow.value, 10) : 0;
 }
 
-function boostZonesFromFok(zones: HungerZone[], sessionId?: string): HungerZone[] {
-  const db = getDb();
-  const fok = readFokSignal(sessionId);
-  if (!fok || !fok.has_fragments || fok.fok_score <= 0.6) return zones;
-
-  const boosted = [...zones];
-  const topicWords = fok.topic.split(/\s+/).filter((word: string) => word.length > 3);
-
-  for (const word of topicWords.slice(0, 2)) {
-    if (boosted.find(zone => zone.entity.toLowerCase() === word.toLowerCase())) continue;
-
-    const entityRow = db.prepare(
-      "SELECT id, content FROM nodes WHERE type = 'entity' AND LOWER(content) = LOWER(?) LIMIT 1"
-    ).get(word) as { id: string; content: string } | undefined;
-
-    if (!entityRow) continue;
-
-    boosted.push({
-      entity: entityRow.content,
-      entity_id: entityRow.id,
-      hunger_score: fok.fok_score * 1.5,
-      mentions: fok.weakly_activated,
-      edges: 0,
-      ignore_count: 0,
-    });
-  }
-
-  return boosted;
-}
-
 // ── 9.1: Knowledge Gap Detection ─────────────────────────────
 
 export function detectHungerZones(sessionId?: string): HungerZone[] {
   const db = getDb();
   const sessionCandidates = sessionId ? getSessionEntityCandidates(sessionId, 50) : [];
   const entities = sessionId ? sessionCandidates.map(candidate => candidate.node) : getAllEntities(50);
-  let zones: HungerZone[] = [];
+  const zones: HungerZone[] = [];
 
   for (const [index, entity] of entities.entries()) {
     const edges = getEdgesForNode(entity.id);
@@ -135,29 +85,44 @@ export function detectHungerZones(sessionId?: string): HungerZone[] {
     });
   }
 
-  zones = boostZonesFromFok(zones, sessionId);
   zones.sort((a, b) => b.hunger_score - a.hunger_score);
-  const topZones = zones.slice(0, 3);
-
-  db.prepare('INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)')
-    .run(getHungerZonesKey(sessionId), JSON.stringify(topZones), Date.now());
-
-  return topZones;
+  return zones.slice(0, 3);
 }
 
-// ── 9.2: Question Generation / Curiosity Impulse ─────────────
+// ── 9.2 v2: Spezifische Impulse basierend auf Graph-Struktur ──
 
-export function generateCuriosityImpulses(zones: HungerZone[]): string[] {
-  const impulses: string[] = [];
+export function generateSpecificImpulse(entity: string, entityId: string): string | null {
+  const edges = getEdgesForNode(entityId);
+  const edgeTypes = new Set(edges.map((e: Edge) => e.type));
 
-  for (const zone of zones.slice(0, 2)) {
-    if (zone.edges === 0) {
-      impulses.push(`Zu "${zone.entity}" weiss das System fast nichts - mehr Kontext wuerde helfen.`);
-    } else {
-      impulses.push(`"${zone.entity}" wird oft erwaehnt, aber Zusammenhaenge fehlen - Details wuerden das Bild vervollstaendigen.`);
-    }
+  const hasUses = edgeTypes.has('uses') || edgeTypes.has('works_with') || edgeTypes.has('builds');
+  const hasPrefers = edgeTypes.has('prefers') || edgeTypes.has('likes') || edgeTypes.has('dislikes');
+  const hasContext = edgeTypes.has('part_of') || edgeTypes.has('member_of') || edgeTypes.has('is_a');
+  const hasSkill = edgeTypes.has('knows') || edgeTypes.has('has_skill') || edgeTypes.has('interested_in');
+
+  if (edges.length === 0) {
+    return `"${entity}" wurde erwaehnt — mehr Kontext wuerde dem System helfen.`;
+  }
+  if (!hasContext && !hasUses) {
+    return `In welchem Zusammenhang steht "${entity}"?`;
+  }
+  if (hasUses && !hasPrefers) {
+    return `"${entity}" wird genutzt — gibt es bestimmte Praeferenzen oder Besonderheiten?`;
+  }
+  if (!hasSkill && edges.length >= 2) {
+    return `Wie tief ist die Erfahrung mit "${entity}"?`;
   }
 
+  return null;
+}
+
+// V1-kompatible Funktion (wird nicht mehr direkt aufgerufen, aber Export beibehalten)
+export function generateCuriosityImpulses(zones: HungerZone[]): string[] {
+  const impulses: string[] = [];
+  for (const zone of zones.slice(0, 2)) {
+    const impulse = generateSpecificImpulse(zone.entity, zone.entity_id);
+    if (impulse) impulses.push(impulse);
+  }
   return impulses;
 }
 
@@ -199,7 +164,29 @@ export function detectLearningOpportunity(text: string, entities: string[]): str
   return [...new Set(newTopics)];
 }
 
-// ── 9.2 continued: Track ignored impulses ────────────────────
+// ── Cooldown Management ──────────────────────────────────────
+
+export function getHungerCooldown(sessionId: string): number {
+  const db = getDb();
+  const row = db.prepare('SELECT value FROM system_state WHERE key = ?')
+    .get(`hunger_cooldown_${sessionId}`) as { value: string } | undefined;
+  return row ? parseInt(row.value, 10) : 0;
+}
+
+export function setHungerCooldown(sessionId: string, count: number): void {
+  const db = getDb();
+  db.prepare('INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)')
+    .run(`hunger_cooldown_${sessionId}`, String(count), Date.now());
+}
+
+export function decrementHungerCooldown(sessionId: string): void {
+  const current = getHungerCooldown(sessionId);
+  if (current > 0) {
+    setHungerCooldown(sessionId, current - 1);
+  }
+}
+
+// ── Track ignored impulses ───────────────────────────────────
 
 export function markImpulseIgnored(zones: HungerZone[]): void {
   const db = getDb();

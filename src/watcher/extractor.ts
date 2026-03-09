@@ -11,6 +11,7 @@ import { recordLLMCall } from '../regulation/energy.js';
 import { generateContext } from '../memory/context-generator.js';
 import { createProspectiveMemory } from '../memory/prospective.js';
 import { parseTemporalExpression } from '../extraction/temporal-parser.js';
+import { applyDopaminReward, getHungerZones } from '../memory/knowledge-hunger.js';
 
 const CONFIDENCE_CAP = 0.8;
 const INVALID_TOPIC_NAMES = new Set([
@@ -626,6 +627,24 @@ export async function extractFromMessageDetailed(
 
   // 24.4: Energie-Management — LLM-Call tracken
   recordLLMCall(sessionId, createdNodes.length);
+
+  // V7: Dopamin Reward — hunger satisfaction when new knowledge fills gaps
+  if (createdNodes.length > 0) {
+    try {
+      const hungerZones = getHungerZones(sessionId);
+      if (hungerZones.length > 0) {
+        for (const node of createdNodes) {
+          const content = node.content.toLowerCase();
+          for (const zone of hungerZones) {
+            if (content.includes(zone.entity.toLowerCase())) {
+              applyDopaminReward(zone.entity, sessionId);
+              break;
+            }
+          }
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
 
   return { nodes: createdNodes, semantic };
 }

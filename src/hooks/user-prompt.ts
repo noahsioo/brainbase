@@ -34,6 +34,8 @@ import {
   setSessionTone,
 } from '../memory/session-runtime-state.js';
 import { diagnosticLog } from '../utils/diagnostic.js';
+import { createSignalAccumulator } from '../utils/signal-accumulator.js';
+import { detectHungerZones, getHungerCooldown, setHungerCooldown, decrementHungerCooldown, detectLearningOpportunity } from '../memory/knowledge-hunger.js';
 
 interface UserPromptInput {
   session_id?: string;
@@ -245,6 +247,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   const sessionId = input.session_id || `session-${Date.now()}`;
   const provider = input.provider || 'mcp';
   const shouldPersistState = !input.context_only;
+  const signals = createSignalAccumulator();
 
   ensureSessionExists(sessionId, provider, input.context_only);
 
@@ -399,8 +402,18 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     signal.combined = Math.max(signal.combined, GATE_LLM * 0.9);
   }
 
-  // Phase 6: Allostasis, Tradeoff, Stress, Environment, Multisensory, Learning Opportunity,
-  // Dopamin Reward, Orienting Level disabled (combined <1% impact, ~15 DB writes saved)
+  // Phase 6: Allostasis, Tradeoff, Stress, Environment, Multisensory disabled
+  // (already integrated in thalamus.ts + context-generator.ts)
+
+  // 9.4 v2: Learning Opportunity — nur bei Topic-Change (re-enabled V7)
+  if (shouldPersistState && topicChanged && signal.entities.length > 0) {
+    try {
+      const opportunities = detectLearningOpportunity(input.message, signal.entities.slice(0, 3));
+      if (opportunities.length > 0) {
+        signals.set(`learning_opportunity_${sessionId}`, opportunities);
+      }
+    } catch { /* non-fatal */ }
+  }
 
   if (shouldPersistState) {
     extractFromPrompt(input.message, sessionId, signal.flags);
@@ -588,8 +601,25 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       updateHotMemoryInDb();
     }
 
-    // 9.1: Hunger zones disabled (V5-5.1)
+    // 9.1 v2: Hunger — conditional knowledge gap detection (re-enabled V7)
+    if (signal.combined >= GATE_HEBBIAN) {
+      const cooldown = getHungerCooldown(sessionId);
+      if (cooldown <= 0 || topicChanged) {
+        try {
+          const zones = detectHungerZones(sessionId);
+          if (zones.length > 0) {
+            signals.set(`hunger_zones_${sessionId}`, zones);
+            setHungerCooldown(sessionId, 3);
+          }
+        } catch { /* non-fatal */ }
+      } else {
+        decrementHungerCooldown(sessionId);
+      }
+    }
   }
+
+  // V7: Flush accumulated signals
+  try { signals.flush(); } catch { /* non-fatal */ }
 
   // M29: Dual Process — signal strength determines context depth, not message count
   let contextMode: DetailMode;
@@ -642,7 +672,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
 
   let finalContext = context;
 
-  // 9.2: Curiosity impulses disabled (V5-5.1)
+  // 9.2: Curiosity impulses — jetzt via Hunger-Slot in Context Generator (V7)
 
   // Inject prospective memory reminders
   if (prospectiveMatches.length > 0) {

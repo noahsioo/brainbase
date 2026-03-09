@@ -11,7 +11,7 @@ export interface PruningResult {
 }
 
 // 19.1: Kontrolliertes Vergessen — archivieren statt loeschen
-function archiveNode(db: ReturnType<typeof getDb>, nodeId: string, tier: 'archive' | 'deep_archive'): void {
+export function archiveNode(db: ReturnType<typeof getDb>, nodeId: string, tier: 'archive' | 'deep_archive'): void {
   const row = db.prepare('SELECT metadata FROM nodes WHERE id = ?').get(nodeId) as { metadata: string | null } | undefined;
   if (!row) return;
   let meta: Record<string, unknown> = {};
@@ -88,10 +88,11 @@ export function pruneGraph(): PruningResult {
     }
   }
 
-  // 2. Orphan Detection: nodes with zero edges (report only)
+  // 2. Orphan Cleanup: nodes with zero edges older than 3 days → archive
+  const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
   const allNodes = db.prepare(
-    "SELECT id FROM nodes WHERE type != 'core'"
-  ).all() as Array<{ id: string }>;
+    "SELECT id, created_at, activation_count FROM nodes WHERE type NOT IN ('core', 'entity', 'identity', 'prospective')"
+  ).all() as Array<{ id: string; created_at: number; activation_count: number }>;
 
   for (const node of allNodes) {
     const edgeCount = (db.prepare(
@@ -100,6 +101,10 @@ export function pruneGraph(): PruningResult {
 
     if (edgeCount === 0) {
       result.orphans_found++;
+      if (node.created_at < threeDaysAgo && node.activation_count < 3) {
+        archiveNode(db, node.id, 'archive');
+        result.nodes_deleted++;
+      }
     }
   }
 

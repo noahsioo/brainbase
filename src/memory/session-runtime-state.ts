@@ -1,10 +1,13 @@
 import { getDb } from './store.js';
-import { getSystemState, setSystemState } from './cold-start.js';
+import { getSystemState } from './cold-start.js';
 import type { AttentionState } from '../meta/metacognition.js';
 import type { ContextSignal } from '../senses/context-sense.js';
 import type { ToneSignal } from '../senses/tone-sense.js';
 import type { EmpathyMode, Mood } from '../signal/echo.js';
 import type { TaskMode } from '../signal/thalamus.js';
+
+// V5-5.2: In-Memory Store statt DB fuer transiente Session-Werte
+const _store = new Map<string, string>();
 
 const SESSION_RUNTIME_KEY_PREFIXES = {
   mood: 'session_mood_',
@@ -74,12 +77,14 @@ function getSessionRuntimeStateKey(kind: SessionRuntimeStateKind, sessionId: str
 
 function getRuntimeStateValue(kind: SessionRuntimeStateKind, sessionId?: string): string | null {
   if (sessionId) {
-    const sessionValue = getSystemState(getSessionRuntimeStateKey(kind, sessionId));
-    if (sessionValue !== null) {
+    const key = getSessionRuntimeStateKey(kind, sessionId);
+    const sessionValue = _store.get(key);
+    if (sessionValue !== undefined) {
       return sessionValue;
     }
   }
 
+  // Legacy-Fallback: DB-Lookup fuer no-sessionId Fall (backward compat)
   return getSystemState(LEGACY_RUNTIME_KEYS[kind]);
 }
 
@@ -109,7 +114,7 @@ export function getSessionMood(sessionId?: string): Mood {
 }
 
 export function setSessionMood(sessionId: string, mood: Mood): void {
-  setSystemState(getSessionRuntimeStateKey('mood', sessionId), mood);
+  _store.set(getSessionRuntimeStateKey('mood', sessionId), mood);
 }
 
 export function getSessionTaskMode(sessionId?: string): TaskMode | null {
@@ -118,7 +123,7 @@ export function getSessionTaskMode(sessionId?: string): TaskMode | null {
 }
 
 export function setSessionTaskMode(sessionId: string, taskMode: TaskMode): void {
-  setSystemState(getSessionRuntimeStateKey('taskMode', sessionId), taskMode);
+  _store.set(getSessionRuntimeStateKey('taskMode', sessionId), taskMode);
 }
 
 export function getSessionEmpathyMode(sessionId?: string): EmpathyMode {
@@ -127,7 +132,7 @@ export function getSessionEmpathyMode(sessionId?: string): EmpathyMode {
 }
 
 export function setSessionEmpathyMode(sessionId: string, empathyMode: EmpathyMode): void {
-  setSystemState(getSessionRuntimeStateKey('empathyMode', sessionId), empathyMode);
+  _store.set(getSessionRuntimeStateKey('empathyMode', sessionId), empathyMode);
 }
 
 export function getSessionTone(sessionId?: string): ToneSignal | null {
@@ -135,7 +140,7 @@ export function getSessionTone(sessionId?: string): ToneSignal | null {
 }
 
 export function setSessionTone(sessionId: string, tone: ToneSignal): void {
-  setSystemState(getSessionRuntimeStateKey('tone', sessionId), JSON.stringify(tone));
+  _store.set(getSessionRuntimeStateKey('tone', sessionId), JSON.stringify(tone));
 }
 
 export function getSessionAttentionState(sessionId?: string): AttentionState | null {
@@ -143,7 +148,7 @@ export function getSessionAttentionState(sessionId?: string): AttentionState | n
 }
 
 export function setSessionAttentionState(sessionId: string, attentionState: AttentionState): void {
-  setSystemState(getSessionRuntimeStateKey('attentionState', sessionId), JSON.stringify(attentionState));
+  _store.set(getSessionRuntimeStateKey('attentionState', sessionId), JSON.stringify(attentionState));
 }
 
 export function getSessionContextSignal(sessionId?: string): ContextSignal | null {
@@ -151,15 +156,22 @@ export function getSessionContextSignal(sessionId?: string): ContextSignal | nul
 }
 
 export function setSessionContextSignal(sessionId: string, contextSignal: ContextSignal): void {
-  setSystemState(getSessionRuntimeStateKey('contextSignal', sessionId), JSON.stringify(contextSignal));
+  _store.set(getSessionRuntimeStateKey('contextSignal', sessionId), JSON.stringify(contextSignal));
 }
 
 export function clearSessionRuntimeState(sessionId: string): void {
-  const db = getDb();
-  const keys = getSessionRuntimeStateKeys(sessionId);
-  for (const key of Object.values(keys)) {
-    db.prepare('DELETE FROM system_state WHERE key = ?').run(key);
+  // In-Memory Map bereinigen
+  for (const prefix of Object.values(SESSION_RUNTIME_KEY_PREFIXES)) {
+    _store.delete(`${prefix}${sessionId}`);
   }
+  // Legacy DB-Keys bereinigen (fuer alte Keys die noch in DB liegen)
+  try {
+    const db = getDb();
+    const keys = getSessionRuntimeStateKeys(sessionId);
+    for (const key of Object.values(keys)) {
+      db.prepare('DELETE FROM system_state WHERE key = ?').run(key);
+    }
+  } catch { /* non-fatal */ }
 }
 
 export function getSessionRuntimeStateSnapshot(sessionId?: string): SessionRuntimeStateSnapshot {
