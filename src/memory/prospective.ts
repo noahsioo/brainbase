@@ -278,6 +278,137 @@ export function getRelevantFailures(message: string, sessionId?: string, limit =
     .map(s => s.node);
 }
 
+// V13: Relevance Scoring — nur relevante Reminders anzeigen
+export function scoreReminderRelevance(
+  node: Node,
+  currentTopic?: string,
+  activeEntities?: string[],
+): number {
+  // 1. Temporal Urgency
+  let temporalScore = 0;
+  if (node.metadata) {
+    try {
+      const meta = JSON.parse(node.metadata) as Record<string, unknown>;
+      const triggerDate = meta.trigger_date as number | undefined;
+      if (triggerDate) {
+        const hoursUntil = (triggerDate - Date.now()) / (60 * 60 * 1000);
+        if (hoursUntil <= 0) temporalScore = 1.0;
+        else if (hoursUntil <= 2) temporalScore = 0.9;
+        else if (hoursUntil <= 6) temporalScore = 0.6;
+        else if (hoursUntil <= 24) temporalScore = 0.3;
+        else if (hoursUntil <= 72) temporalScore = 0.1;
+      }
+    } catch { /* skip */ }
+  }
+
+  // 2. Topic Relevance (word overlap)
+  let topicScore = 0;
+  const contentLower = node.content.toLowerCase();
+  const contentWords = contentLower.split(/\s+/).filter(w => w.length > 3);
+
+  if (currentTopic) {
+    const topicWords = currentTopic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const overlap = contentWords.filter(w => topicWords.some(tw => tw.includes(w) || w.includes(tw))).length;
+    topicScore = Math.min(1, overlap / Math.max(2, Math.min(contentWords.length, 3)));
+  }
+
+  // 3. Entity Match — aktive Entities matchen Reminder-Inhalt
+  if (activeEntities && activeEntities.length > 0) {
+    for (const entity of activeEntities) {
+      if (entity.length > 2 && contentLower.includes(entity.toLowerCase())) {
+        topicScore = Math.max(topicScore, 0.8);
+        break;
+      }
+    }
+  }
+
+  return Math.max(topicScore, temporalScore);
+}
+
+// V13: Life Event Relevance Scoring
+export function scoreLifeEventRelevance(
+  node: Node,
+  currentTopic?: string,
+  activeEntities?: string[],
+  intent?: string,
+): number {
+  // Code/Debug intent → nur bei hoher Urgency
+  const isCodingIntent = intent && ['debugging', 'building', 'reviewing', 'coding'].includes(intent);
+
+  // Temporal: wie nah ist Start/Ende?
+  let temporalScore = 0;
+  if (node.metadata) {
+    try {
+      const meta = JSON.parse(node.metadata) as Record<string, unknown>;
+      const validFrom = meta.valid_from as number | undefined;
+      const validUntil = meta.valid_until as number | undefined;
+      const now = Date.now();
+
+      if (validFrom && validFrom > now) {
+        const daysUntil = (validFrom - now) / (24 * 60 * 60 * 1000);
+        if (daysUntil <= 2) temporalScore = 0.6;
+        else if (daysUntil <= 7) temporalScore = 0.2;
+      }
+      if (validUntil && validUntil > now && validFrom && validFrom <= now) {
+        const daysLeft = (validUntil - now) / (24 * 60 * 60 * 1000);
+        if (daysLeft <= 3) temporalScore = Math.max(temporalScore, 0.5);
+      }
+    } catch { /* skip */ }
+  }
+
+  // Topic match
+  let topicScore = 0;
+  const contentLower = node.content.toLowerCase();
+
+  if (currentTopic) {
+    const topicWords = currentTopic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    const contentWords = contentLower.split(/\s+/).filter(w => w.length > 3);
+    const overlap = contentWords.filter(w => topicWords.some(tw => tw.includes(w) || w.includes(tw))).length;
+    topicScore = Math.min(1, overlap / Math.max(2, Math.min(contentWords.length, 3)));
+  }
+
+  if (activeEntities) {
+    for (const entity of activeEntities) {
+      if (entity.length > 2 && contentLower.includes(entity.toLowerCase())) {
+        topicScore = Math.max(topicScore, 0.7);
+        break;
+      }
+    }
+  }
+
+  const score = Math.max(topicScore, temporalScore);
+
+  // Coding intent → höhere Schwelle nötig
+  if (isCodingIntent) return score * 0.5;
+
+  return score;
+}
+
+// V13: Proaktives Reminder-Format
+export function formatProactiveReminder(node: Node): string {
+  let hoursUntil = Infinity;
+  try {
+    const meta = JSON.parse(node.metadata || '{}') as Record<string, unknown>;
+    const triggerDate = meta.trigger_date as number | undefined;
+    if (triggerDate) {
+      hoursUntil = (triggerDate - Date.now()) / (60 * 60 * 1000);
+    }
+  } catch { /* skip */ }
+
+  if (hoursUntil <= 0) {
+    return `UEBERFAELLIG — erinnere den User SOFORT: "${node.content}"`;
+  } else if (hoursUntil <= 2) {
+    return `DRINGEND (in ~${Math.round(hoursUntil * 60)} Min) — erinnere den User: "${node.content}"`;
+  } else if (hoursUntil <= 6) {
+    return `Heute noch faellig (in ~${Math.round(hoursUntil)}h) — erinnere den User: "${node.content}"`;
+  } else if (hoursUntil <= 24) {
+    return `Morgen faellig — erwaehne wenn passend: "${node.content}"`;
+  } else {
+    const days = Math.round(hoursUntil / 24);
+    return `In ~${days} Tagen — zur Info: "${node.content}"`;
+  }
+}
+
 // V11-4: Aktive Life Events abfragen
 export function getActiveLifeEvents(): Node[] {
   const db = getDb();

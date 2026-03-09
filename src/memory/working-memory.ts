@@ -251,12 +251,23 @@ export function finalizeWorkingMemory(sessionId: string): string | null {
       .map(e => sanitizeEntityName(e.content))
       .filter(name => name.length > 2 && isRealEntity(name))
       .slice(0, 3);
+
+    // Fallback: Top-Entities aus allEntities wenn Graph leer
+    const topEntityNames = topEntities
+      .filter(e => isRealEntity(e.name))
+      .slice(0, 3)
+      .map(e => e.name);
+
     const bridgeTopic = graphEntityNames.length > 0
       ? graphEntityNames.join(', ')
-      : memory.current_topic;
+      : topEntityNames.length > 0
+        ? topEntityNames.join(', ')
+        : memory.current_topic;
     const bridgeStack = graphEntityNames.length > 0
       ? graphEntityNames.slice(0, 3)
-      : memory.context_stack.slice(0, 3);
+      : topEntityNames.length > 0
+        ? topEntityNames.slice(0, 3)
+        : memory.context_stack.slice(0, 3);
 
     const bridgeState = {
       last_topic: bridgeTopic,
@@ -431,6 +442,11 @@ const GARBAGE_ENTITY_WORDS = new Set([
   'habe', 'hatte', 'hatten', 'letztes', 'letzte', 'letzten',
   'zuletzt', 'gemacht', 'gesagt', 'gemeint', 'gefragt',
   'vorher', 'vorhin', 'davor', 'danach', 'dabei',
+  'danke', 'bitte', 'koennte', 'wuerde', 'sollte',
+  'schreibe', 'schreiben', 'lese', 'lesen', 'meinen', 'meiner',
+  'sagen', 'fragen', 'denke', 'denken', 'glaube', 'glauben',
+  'finde', 'finden', 'brauche', 'brauchen', 'nutze', 'nutzen',
+  'heisst', 'heisse', 'weisst', 'wissen', 'ueber',
 ]);
 
 export function isRealEntity(name: string): boolean {

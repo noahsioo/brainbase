@@ -163,30 +163,27 @@ Only use facts for these SPECIFIC cases:
 Allowed fact types: preference, decision, identity, example, reminder, life_event
 Do NOT use any other fact type. If info fits as entity+relation, use that instead.
 
-## WHEN TO SET nothing_new
-nothing_new: true means "there is ZERO new concrete information in this message".
-- Smalltalk, confirmations, code requests, build commands, greetings → nothing_new: true
-- Meta-comments about the conversation → nothing_new: true
-- Code debugging, fixing, building, deploying → nothing_new: true (unless a NEW tool/technology is mentioned)
+## nothing_new RULES
+Set nothing_new: true ONLY for these cases:
+- Pure smalltalk: "hi", "ok", "danke", "ja genau", "weiter"
+- Pure code commands: "fix the bug", "run the tests", "deploy it"
+- The message contains ZERO named entities, people, places, or concrete facts
 
-CRITICAL: If a message mentions ANY new named entity (person, place, company, tool) that is NOT in the known entities list, set nothing_new: false and extract it.
-Example: "Ich studiere an der TU Muenchen und arbeite bei Siemens"
-- If TU Muenchen is already known but Siemens is NOT → nothing_new: false, extract Siemens
-- Only set nothing_new: true if EVERYTHING in the message is already known
+For EVERYTHING ELSE → nothing_new: false. Extract entities and relations.
 
 ## ABSOLUTE RULES
-1. If ANY new concrete entity or fact exists → nothing_new: false
-2. NEVER store vague observations: "User is exploring...", "User wants to build...", "User believes..."
-3. Only store CONCRETE, NAMED things: a person, a technology, a decision, a preference
-4. confidence between 0.3 and 0.5
-5. Prefer entities+relations over facts. Facts ONLY for preferences/decisions/identity
-6. "User" or the user's name is always a valid entity (type: person)
-7. Max 5 entities per message. If more → keep only the most important
-8. You can UPDATE existing knowledge via the "updates" array
-9. Repeating ONLY already known info → nothing_new: true
-10. Extract PEOPLE by name (family, friends, colleagues). "Mein Bruder Max" → entity Max (person) + relation
-11. Extract ORGANIZATIONS (companies, universities, teams) the user is connected to
-12. It's better to extract a real entity than to miss it. But NEVER store garbage.`;
+1. ALWAYS extract NEW named entities (people, companies, places, tools) not in "already known"
+2. "Mein Bruder Max" → entity "Max" (person) + relation user → knows → Max
+3. "Arbeite bei Siemens" → entity "Siemens" (organization) + relation user → works_with → Siemens
+4. "Wohne in Berlin" → entity "Berlin" (place) + relation user → located_at → Berlin
+5. If a message mentions 3 known things and 1 new thing → nothing_new: false, extract the new thing
+6. NEVER store vague observations: "User is exploring...", "User wants to build..."
+7. Only store CONCRETE, NAMED things: a person, a technology, a decision, a preference
+8. confidence between 0.3 and 0.5
+9. Prefer entities+relations over facts. Facts ONLY for preferences/decisions/identity
+10. Max 5 entities per message. If more → keep only the most important
+11. You can UPDATE existing knowledge via the "updates" array
+12. NEVER store garbage. But missing a real entity is worse than being cautious.`;
 
   if (frustration) {
     return base + `
@@ -236,8 +233,16 @@ function buildExtractionPrompt(
     conversationBlock = `New message: "${message}"\n\nExtract NEW entities, relations, and facts from this message. Focus on NAMED things (people, companies, places, tools) that are NOT in the "already known" section.`;
   }
 
-  return `${nodesContext}
+  // MESSAGE FIRST, then context — so the LLM focuses on the message
+  return `## MESSAGE TO ANALYZE
 ${conversationBlock}
+
+## EXISTING KNOWLEDGE (for reference only — do NOT extract from this section)
+${nodesContext}
+
+## YOUR TASK
+Extract NEW entities, relations, and facts from the MESSAGE above that are NOT in the existing knowledge.
+Do NOT extract anything from the "EXISTING KNOWLEDGE" section — that is already stored.
 
 Respond with this exact JSON:
 {
@@ -260,17 +265,11 @@ Respond with this exact JSON:
   "emotion": { "type": "neutral|frustrated|excited|curious", "intensity": 0.0-1.0 }
 }
 
-RULES FOR topic / intent / references:
-- topic must be a SHORT concrete noun phrase, not a sentence
-- topic must NOT be vague meta like "conversation", "project", "request", "message"
-- intent is for the LATEST user message only
-- references should contain unresolved callbacks like "das", "it", "that bug", otherwise []
-
-If nothing_new is true, entities/relations/new_facts/updates MUST be empty.
-topic and intent may still be set if clear. references may still be set if useful.
-Prefer entities+relations over facts. Facts ONLY for preferences, decisions, identity, or examples.
-FOCUS: Extract from the USER'S MESSAGE, not from the existing knowledge. Do NOT create facts about things you already know.
-Remember: nothing_new: true is the DEFAULT. Most messages don't contain new knowledge.`;
+RULES:
+- Extract ONLY from the MESSAGE section, NEVER from existing knowledge
+- topic must be a SHORT concrete noun phrase
+- If nothing_new is true, entities/relations/new_facts/updates MUST be empty
+- Prefer entities+relations over facts. Facts ONLY for preferences, decisions, identity, examples, reminders, life_events`;
 }
 
 function getRecentMessages(sessionId: string, limit: number = 10): string {
@@ -333,6 +332,7 @@ export async function extractFromMessageDetailed(
   flags?: KeywordFlags,
 ): Promise<MessageExtractionResult> {
   if (!isSubstantiveMessage(message)) {
+    console.error(`[Extractor] Filtered as non-substantive: "${message.slice(0, 80)}" (session: ${sessionId})`);
     recordLLMCall(sessionId, 0);
     return {
       nodes: [],
@@ -367,6 +367,15 @@ export async function extractFromMessageDetailed(
 
   const prompt = buildExtractionPrompt(message, existingNodes, recentContext);
 
+  // Debug: log prompt to file for diagnosis
+  try {
+    const { appendFileSync: _appendFS, mkdirSync: _mkFS } = await import('fs');
+    const { join: _join } = await import('path');
+    const { LOGS_DIR: _LD } = await import('../config.js');
+    _mkFS(_LD, { recursive: true });
+    _appendFS(_join(_LD, 'extraction-debug.log'), `[${new Date().toISOString()}] session=${sessionId}\nPROMPT:\n${prompt.slice(0, 1500)}\n---END PROMPT---\n`);
+  } catch { /* silent */ }
+
   let response: ExtractionResponse & { updates?: Array<{ existing_content: string; new_content: string; reason: string }> };
   try {
     response = await client.generateJson(prompt, {
@@ -383,10 +392,18 @@ export async function extractFromMessageDetailed(
     return { nodes: [], semantic: null };
   }
 
-  // Diagnostic: log when LLM says nothing_new but message had substance
-  if (response.nothing_new && process.env.MEMORY_DEBUG) {
-    const msgPreview = message.slice(0, 120);
-    console.error(`[Extractor] LLM returned nothing_new:true for: "${msgPreview}"`);
+  // Diagnostic: log extraction result summary
+  {
+    const entityCount = Array.isArray(response.entities) ? response.entities.length : 0;
+    const factCount = Array.isArray(response.new_facts) ? response.new_facts.length : 0;
+    const relCount = Array.isArray(response.relations) ? response.relations.length : 0;
+    try {
+      const { appendFileSync: _aFS, mkdirSync: _mFS } = await import('fs');
+      const { join: _jn } = await import('path');
+      const { LOGS_DIR: _LL } = await import('../config.js');
+      _mFS(_LL, { recursive: true });
+      _aFS(_jn(_LL, 'extraction-debug.log'), `RESPONSE: nothing_new=${response.nothing_new} entities=${entityCount} facts=${factCount} rels=${relCount}\n${JSON.stringify(response).slice(0, 1000)}\n===END===\n`);
+    } catch { /* silent */ }
   }
 
   const semantic = buildWatcherSemanticPayload(response);

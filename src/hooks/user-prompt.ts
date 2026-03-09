@@ -25,7 +25,7 @@ import { getSystemMood } from '../senses/interoception.js';
 import { shouldAllowLLMCall } from '../regulation/energy.js';
 import { calculateStressLevel } from '../regulation/stress-response.js';
 import { getLastContextMode, recordContextFeedback, recordContextModeDelivery } from '../learning/communication-learner.js';
-import { inferMessageIntent, updateWorkingMemory, getWorkingMemory } from '../memory/working-memory.js';
+import { inferMessageIntent, updateWorkingMemory, getWorkingMemory, isRealEntity } from '../memory/working-memory.js';
 import {
   setSessionAttentionState,
   setSessionContextSignal,
@@ -284,8 +284,10 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   const provisionalFocusEntities = shouldPersistState
     ? updateSessionFocus(sessionId, signal.entities.slice(0, 5))
     : signal.entities.slice(0, 5);
-  const provisionalTopic = provisionalFocusEntities.length > 0
-    ? provisionalFocusEntities.slice(0, 3).join(' ')
+  // V12: Filter garbage from provisional topic — only use real entities
+  const realProvisionalEntities = provisionalFocusEntities.filter(isRealEntity);
+  const provisionalTopic = realProvisionalEntities.length > 0
+    ? realProvisionalEntities.slice(0, 3).join(' ')
     : undefined;
 
   // M32: Task Switching Cost — smooth transition when topic changes
