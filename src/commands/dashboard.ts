@@ -155,6 +155,17 @@ export const dashboardCommand = new Command('dashboard')
       res.end(html);
     });
 
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`\n  Dashboard is already running on http://localhost:${port}\n`);
+        console.log(`  Open the URL above in your browser.\n`);
+        process.exit(0);
+      } else {
+        console.error(`\n  Error starting dashboard: ${err.message}\n`);
+        process.exit(1);
+      }
+    });
+
     server.listen(port, () => {
       console.log(`\n  BrainBase - Brain Dashboard\n`);
       console.log(`  http://localhost:${port}\n`);

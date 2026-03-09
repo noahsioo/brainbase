@@ -30,13 +30,12 @@ const cb = chalk.bold.cyan;
 const dim = chalk.dim;
 
 const BANNER = `
-${cb('  ██████╗ ██████╗  █████╗ ██╗███╗   ██╗')}
-${cb('  ██╔══██╗██╔══██╗██╔══██╗██║████╗  ██║')}
-${cb('  ██████╔╝██████╔╝███████║██║██╔██╗ ██║')}
-${cb('  ██╔══██╗██╔══██╗██╔══██║██║██║╚██╗██║')}
-${cb('  ██████╔╝██║  ██║██║  ██║██║██║ ╚████║')}
-${cb('  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝')}
-${chalk.bold.white('       B R A I N B A S E')}  ${dim('v0.1')}
+${cb('  ██████╗ ██████╗  █████╗ ██╗███╗   ██╗██████╗  █████╗ ███████╗███████╗')}
+${cb('  ██╔══██╗██╔══██╗██╔══██╗██║████╗  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝')}
+${cb('  ██████╔╝██████╔╝███████║██║██╔██╗ ██║██████╔╝███████║███████╗█████╗')}
+${cb('  ██╔══██╗██╔══██╗██╔══██║██║██║╚██╗██║██╔══██╗██╔══██║╚════██║██╔══╝')}
+${cb('  ██████╔╝██║  ██║██║  ██║██║██║ ╚████║██████╔╝██║  ██║███████║███████╗')}
+${cb('  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝')}
 `;
 
 const DISPLAY_NAMES: Record<string, string> = {
@@ -92,7 +91,7 @@ const PROVIDER_GROUPS = [
   { value: 'anthropic', label: 'Anthropic', hint: 'API key' },
   { value: 'chutes', label: 'Chutes', hint: 'API key' },
   { value: 'vllm', label: 'vLLM', hint: 'Local/self-hosted OpenAI-compatible' },
-  { value: 'minimax', label: 'MiniMax', hint: 'MiniMax M1' },
+  { value: 'minimax', label: 'MiniMax', hint: 'M2.5 (recommended)' },
   { value: 'moonshot', label: 'Moonshot AI (Kimi K2.5)', hint: 'API key' },
   { value: 'google', label: 'Google', hint: 'Gemini API key' },
   { value: 'xai', label: 'xAI (Grok)', hint: 'API key' },
@@ -126,37 +125,115 @@ const PROVIDER_GROUPS = [
 ];
 
 const DEFAULT_MODELS: Record<string, string> = {
-  openai: 'gpt-4o-mini',
-  anthropic: 'claude-haiku-4-5-20251001',
-  google: 'gemini-2.0-flash',
+  openai: 'gpt-5.4',
+  anthropic: 'claude-sonnet-4-6',
+  google: 'gemini-2.5-flash',
   groq: 'llama-3.3-70b-versatile',
-  mistral: 'mistral-small-latest',
-  openrouter: 'meta-llama/llama-3.3-70b-instruct',
-  xai: 'grok-3-mini',
-  together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+  mistral: 'mistral-large-latest',
+  openrouter: 'auto',
+  xai: 'grok-4',
+  together: 'moonshotai/Kimi-K2.5',
   deepseek: 'deepseek-chat',
-  huggingface: 'meta-llama/Llama-3.3-70B-Instruct',
+  huggingface: 'deepseek-ai/DeepSeek-R1',
   chutes: 'deepseek-ai/DeepSeek-V3-0324',
-  volcengine: 'doubao-1.5-pro-32k',
-  byteplus: 'doubao-1.5-pro-32k',
-  minimax: 'MiniMax-M1',
-  moonshot: 'moonshot-v1-auto',
+  volcengine: 'ark-code-latest',
+  byteplus: 'ark-code-latest',
+  minimax: 'MiniMax-M2.5',
+  moonshot: 'kimi-k2.5',
   qwen: 'qwen-plus',
   cerebras: 'llama-3.3-70b',
   nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
-  venice: 'llama-3.3-70b',
-  litellm: 'gpt-4o-mini',
-  cloudflare: 'gpt-4o-mini',
-  kilocode: 'meta-llama/llama-3.3-70b-instruct',
-  qianfan: 'ernie-4.0-8k',
-  'vercel-ai': 'gpt-4o-mini',
-  synthetic: 'claude-haiku-4-5-20251001',
-  xiaomi: 'MiLM-1',
+  venice: 'kimi-k2-5',
+  litellm: 'claude-opus-4-6',
+  cloudflare: 'claude-sonnet-4-5',
+  kilocode: 'kilo/auto',
+  qianfan: 'deepseek-v3.2',
+  'vercel-ai': 'anthropic/claude-opus-4.6',
+  synthetic: 'hf:MiniMaxAI/MiniMax-M2.5',
+  xiaomi: 'mimo-v2-flash',
   vllm: 'default',
-  zai: 'glm-4-flash',
-  copilot: 'gpt-4o-mini',
-  'opencode-zen': 'gpt-4o-mini',
-  custom: 'gpt-4o-mini',
+  zai: 'glm-5',
+  copilot: 'gpt-5.4',
+  'opencode-zen': 'claude-opus-4-6',
+  custom: 'gpt-5.4',
+};
+
+type ModelOption = { id: string; label: string; ctx?: string; hint?: string };
+
+const MODEL_CATALOG: Record<string, ModelOption[]> = {
+  openai: [
+    { id: 'gpt-5.4', label: 'GPT-5.4', ctx: '1M', hint: 'newest, smartest — recommended' },
+    { id: 'gpt-5.4-pro', label: 'GPT-5.4 Pro', ctx: '1M', hint: 'extended thinking' },
+    { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', ctx: '1M', hint: 'code-optimized' },
+    { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', ctx: '1M', hint: 'stable codex' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o Mini', ctx: '128k', hint: 'legacy, cheap' },
+  ],
+  anthropic: [
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', ctx: '200k', hint: 'balanced — recommended' },
+    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6', ctx: '200k', hint: 'smartest' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', ctx: '200k', hint: 'fast, cheapest' },
+  ],
+  google: [
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', ctx: '1M', hint: 'fast — recommended' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', ctx: '1M', hint: 'smartest stable' },
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro', ctx: '2M', hint: 'preview, newest' },
+  ],
+  groq: [
+    { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', ctx: '128k', hint: 'recommended' },
+    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B', ctx: '128k', hint: 'fastest' },
+    { id: 'deepseek-r1-distill-llama-70b', label: 'DeepSeek R1 70B', ctx: '128k', hint: 'reasoning' },
+  ],
+  mistral: [
+    { id: 'mistral-large-latest', label: 'Mistral Large', hint: 'smartest — recommended' },
+    { id: 'mistral-small-latest', label: 'Mistral Small', hint: 'fast, cheap' },
+    { id: 'mistral-medium-latest', label: 'Mistral Medium', hint: 'balanced' },
+  ],
+  xai: [
+    { id: 'grok-4', label: 'Grok 4', hint: 'newest — recommended' },
+    { id: 'grok-3', label: 'Grok 3', hint: 'stable' },
+    { id: 'grok-3-mini', label: 'Grok 3 Mini', hint: 'fast, cheap' },
+  ],
+  deepseek: [
+    { id: 'deepseek-chat', label: 'DeepSeek V3', ctx: '64k', hint: 'recommended' },
+    { id: 'deepseek-reasoner', label: 'DeepSeek R1', ctx: '64k', hint: 'reasoning' },
+  ],
+  together: [
+    { id: 'moonshotai/Kimi-K2.5', label: 'Kimi K2.5', hint: 'recommended' },
+    { id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', label: 'Llama 3.3 70B Turbo', hint: 'fast' },
+    { id: 'deepseek-ai/DeepSeek-V3', label: 'DeepSeek V3', hint: 'smart' },
+  ],
+  openrouter: [
+    { id: 'auto', label: 'Auto (best available)', hint: 'recommended' },
+    { id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6', hint: 'via OpenRouter' },
+    { id: 'openai/gpt-5.4', label: 'GPT-5.4', hint: 'via OpenRouter' },
+  ],
+  cerebras: [
+    { id: 'llama-3.3-70b', label: 'Llama 3.3 70B', hint: 'fast — recommended' },
+    { id: 'llama-3.1-8b', label: 'Llama 3.1 8B', hint: 'fastest' },
+  ],
+  chutes: [
+    { id: 'deepseek-ai/DeepSeek-V3-0324', label: 'DeepSeek V3', hint: 'recommended' },
+  ],
+  moonshot: [
+    { id: 'kimi-k2.5', label: 'Kimi K2.5', hint: 'newest — recommended' },
+    { id: 'moonshot-v1-auto', label: 'Moonshot Auto', hint: 'legacy' },
+  ],
+  qwen: [
+    { id: 'qwen-plus', label: 'Qwen Plus', hint: 'recommended' },
+    { id: 'qwen-max', label: 'Qwen Max', hint: 'smartest' },
+    { id: 'qwen-turbo', label: 'Qwen Turbo', hint: 'fastest' },
+  ],
+  nvidia: [
+    { id: 'nvidia/llama-3.1-nemotron-70b-instruct', label: 'Nemotron 70B', hint: 'recommended' },
+  ],
+  minimax: [
+    { id: 'MiniMax-M2.5', label: 'MiniMax M2.5', hint: 'newest — recommended' },
+    { id: 'MiniMax-M1', label: 'MiniMax M1', hint: 'legacy' },
+  ],
+  venice: [
+    { id: 'kimi-k2-5', label: 'Kimi K2.5', hint: 'recommended' },
+    { id: 'llama-3.3-70b', label: 'Llama 3.3 70B', hint: 'open source' },
+  ],
 };
 
 const ENV_VAR_DEFAULTS: Record<string, string> = {
@@ -364,7 +441,7 @@ export const initCommand = new Command('init')
       // Cloud provider selected — ask auth method
       const providerKey = modelProvider as CloudConfig['provider'];
       const providerLabel = PROVIDER_GROUPS.find(g => g.value === modelProvider)!.label;
-      const defaultModel = DEFAULT_MODELS[providerKey] || 'gpt-4o-mini';
+      const defaultModel = DEFAULT_MODELS[providerKey] || 'gpt-5.4';
 
       // Auto-detect: check if the default env var is already set
       const ENV_VAR_ALTERNATIVES: Record<string, string[]> = {
@@ -532,7 +609,7 @@ export const initCommand = new Command('init')
 
         const customModelId = await p.text({
           message: 'Model ID:',
-          placeholder: customApiStyle === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini',
+          placeholder: customApiStyle === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-5.4',
           validate: (val) => { if (!val || val.trim().length < 2) return 'Model ID too short'; },
         });
         if (p.isCancel(customModelId)) { p.cancel('Setup cancelled.'); process.exit(0); }
@@ -675,34 +752,73 @@ export const initCommand = new Command('init')
 
       // Model selection (skip for custom, already asked above)
       if (modelProvider !== 'custom') {
-        const modelChoice = await p.select({
-          message: 'Model',
-          options: [
-            { value: 'default', label: `${defaultModel}`, hint: 'recommended' },
-            { value: 'custom', label: 'Enter manually', hint: 'custom model ID' },
-          ],
-        });
+        const catalog = MODEL_CATALOG[providerKey];
 
-        if (p.isCancel(modelChoice)) {
-          p.cancel('Setup cancelled.');
-          process.exit(0);
-        }
+        if (catalog && catalog.length > 0) {
+          const modelOptions = catalog.map(m => ({
+            value: m.id,
+            label: m.label,
+            hint: [m.ctx ? `ctx ${m.ctx}` : null, m.hint].filter(Boolean).join(' · '),
+          }));
+          modelOptions.push({ value: '__manual__', label: 'Enter manually', hint: 'custom model ID' });
 
-        if (modelChoice === 'custom') {
-          const customModel = await p.text({
-            message: 'Model ID:',
-            placeholder: defaultModel,
-            validate: (val) => {
-              if (!val || val.trim().length < 2) return 'Model ID too short';
-            },
+          const modelChoice = await p.select({
+            message: 'Model',
+            options: modelOptions,
+            initialValue: defaultModel,
           });
-          if (p.isCancel(customModel)) {
+
+          if (p.isCancel(modelChoice)) {
             p.cancel('Setup cancelled.');
             process.exit(0);
           }
-          selectedModel = customModel as string;
+
+          if (modelChoice === '__manual__') {
+            const customModel = await p.text({
+              message: 'Model ID:',
+              placeholder: defaultModel,
+              validate: (val) => {
+                if (!val || val.trim().length < 2) return 'Model ID too short';
+              },
+            });
+            if (p.isCancel(customModel)) {
+              p.cancel('Setup cancelled.');
+              process.exit(0);
+            }
+            selectedModel = customModel as string;
+          } else {
+            selectedModel = modelChoice as string;
+          }
         } else {
-          selectedModel = defaultModel;
+          const modelChoice = await p.select({
+            message: 'Model',
+            options: [
+              { value: 'default', label: `${defaultModel}`, hint: 'recommended' },
+              { value: 'custom', label: 'Enter manually', hint: 'custom model ID' },
+            ],
+          });
+
+          if (p.isCancel(modelChoice)) {
+            p.cancel('Setup cancelled.');
+            process.exit(0);
+          }
+
+          if (modelChoice === 'custom') {
+            const customModel = await p.text({
+              message: 'Model ID:',
+              placeholder: defaultModel,
+              validate: (val) => {
+                if (!val || val.trim().length < 2) return 'Model ID too short';
+              },
+            });
+            if (p.isCancel(customModel)) {
+              p.cancel('Setup cancelled.');
+              process.exit(0);
+            }
+            selectedModel = customModel as string;
+          } else {
+            selectedModel = defaultModel;
+          }
         }
       }
 

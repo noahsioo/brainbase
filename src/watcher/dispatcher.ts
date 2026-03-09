@@ -15,7 +15,7 @@ import { extractTasks, hasTaskSignal, type TaskExtractionResult } from './task-w
 import { extractTacitPatterns } from '../tacit/tacit-tracker.js';
 import { updateMetaProfile } from '../tacit/meta-learner.js';
 import { updateHotMemoryInDb } from '../memory/hot.js';
-import { getWarmMemoryForTopic } from '../memory/warm.js';
+import { getWarmMemoryForTopic, getWarmMemoryForTopicAsync } from '../memory/warm.js';
 import { getDb } from '../memory/store.js';
 import type { KeywordFlags } from '../signal/keywords.js';
 import { detectAndStoreExample } from '../extraction/example-detector.js';
@@ -297,7 +297,7 @@ export async function dispatchUserPrompt(
   // Build system message if topic changed with warm memory
   let systemMessage: string | undefined;
   if (result.topic?.changed && result.topic.confidence > 0.6) {
-    const warmMemory = getWarmMemoryForTopic(dispatcherState.currentTopic, sessionId);
+    const warmMemory = await getWarmMemoryForTopicAsync(dispatcherState.currentTopic, sessionId);
     if (warmMemory) {
       systemMessage = warmMemory;
     }

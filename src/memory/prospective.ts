@@ -289,7 +289,20 @@ export function getRelevantFailures(message: string, sessionId?: string, limit =
     .map(s => s.node);
 }
 
-// V13: Relevance Scoring — nur relevante Reminders anzeigen
+// V13: Stem-aware word matching for morphological variants (move↔moving, deploy↔deployment)
+function wordsMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  if (a.length < 4 || b.length < 4) return false;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (longer.length - shorter.length >= 2) {
+    const stem = shorter.slice(0, -1);
+    if (stem.length >= 3 && longer.startsWith(stem)) return true;
+  }
+  return false;
+}
+
+// V13: Relevance Scoring — only show relevant reminders
 export function scoreReminderRelevance(
   node: Node,
   currentTopic?: string,
@@ -312,18 +325,18 @@ export function scoreReminderRelevance(
     } catch { /* skip */ }
   }
 
-  // 2. Topic Relevance (word overlap)
+  // 2. Topic Relevance (stem-aware word overlap)
   let topicScore = 0;
   const contentLower = node.content.toLowerCase();
   const contentWords = contentLower.split(/\s+/).filter(w => w.length > 3);
 
   if (currentTopic) {
     const topicWords = currentTopic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-    const overlap = contentWords.filter(w => topicWords.some(tw => tw.includes(w) || w.includes(tw))).length;
-    topicScore = Math.min(1, overlap / Math.max(2, Math.min(contentWords.length, 3)));
+    const overlap = contentWords.filter(w => topicWords.some(tw => wordsMatch(w, tw))).length;
+    topicScore = Math.min(1, overlap / Math.max(1, Math.min(contentWords.length, 2)));
   }
 
-  // 3. Entity Match — aktive Entities matchen Reminder-Inhalt
+  // 3. Entity Match
   if (activeEntities && activeEntities.length > 0) {
     for (const entity of activeEntities) {
       if (entity.length > 2 && contentLower.includes(entity.toLowerCase())) {
@@ -374,8 +387,8 @@ export function scoreLifeEventRelevance(
   if (currentTopic) {
     const topicWords = currentTopic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
     const contentWords = contentLower.split(/\s+/).filter(w => w.length > 3);
-    const overlap = contentWords.filter(w => topicWords.some(tw => tw.includes(w) || w.includes(tw))).length;
-    topicScore = Math.min(1, overlap / Math.max(2, Math.min(contentWords.length, 3)));
+    const overlap = contentWords.filter(w => topicWords.some(tw => wordsMatch(w, tw))).length;
+    topicScore = Math.min(1, overlap / Math.max(1, Math.min(contentWords.length, 2)));
   }
 
   if (activeEntities) {

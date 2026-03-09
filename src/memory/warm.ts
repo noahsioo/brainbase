@@ -1,9 +1,34 @@
-import { searchNodes, type Node } from './store.js';
+import { searchNodes, setQueryEmbedding, type Node } from './store.js';
 import { activateByQuery, getActivatedNodes } from './activation.js';
+import { createEmbeddingClient } from '../llm/embeddings.js';
 
 const WARM_EXCLUDED_TYPES = new Set(['failure', 'system_knowledge', 'auto_topic', 'example']);
 
+let _warmEmbedPromise: Promise<void> | null = null;
+
+async function ensureQueryEmbedding(topic: string): Promise<void> {
+  const client = createEmbeddingClient();
+  if (!client) return;
+  try {
+    const vec = await client.embed(topic);
+    setQueryEmbedding(topic, vec);
+  } catch {
+    // Non-fatal — keyword search still works as fallback
+  }
+}
+
+export async function getWarmMemoriesAsync(topic: string, limit = 10, sessionId?: string): Promise<Node[]> {
+  await ensureQueryEmbedding(topic);
+  return getWarmMemoriesSync(topic, limit, sessionId);
+}
+
 export function getWarmMemories(topic: string, limit = 10, sessionId?: string): Node[] {
+  // Fire embedding request in background for NEXT call
+  _warmEmbedPromise = ensureQueryEmbedding(topic);
+  return getWarmMemoriesSync(topic, limit, sessionId);
+}
+
+function getWarmMemoriesSync(topic: string, limit: number, sessionId?: string): Node[] {
   activateByQuery(topic, 1.0, sessionId);
   const activated = getActivatedNodes(limit * 2, sessionId);
   const filtered = activated.filter(n =>
@@ -35,5 +60,10 @@ export function buildWarmMemoryBlock(topic: string, nodes: Node[]): string {
 
 export function getWarmMemoryForTopic(topic: string, sessionId?: string): string {
   const nodes = getWarmMemories(topic, 10, sessionId);
+  return buildWarmMemoryBlock(topic, nodes);
+}
+
+export async function getWarmMemoryForTopicAsync(topic: string, sessionId?: string): Promise<string> {
+  const nodes = await getWarmMemoriesAsync(topic, 10, sessionId);
   return buildWarmMemoryBlock(topic, nodes);
 }

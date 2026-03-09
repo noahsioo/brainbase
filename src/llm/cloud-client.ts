@@ -2,37 +2,37 @@ import type { LLMClient, GenerateOpts } from './types.js';
 import type { CloudConfig } from '../config.js';
 
 const DEFAULT_MODELS: Record<string, string> = {
-  openai: 'gpt-4o-mini',
-  anthropic: 'claude-haiku-4-5-20251001',
-  google: 'gemini-2.0-flash',
+  openai: 'gpt-5.4',
+  anthropic: 'claude-sonnet-4-6',
+  google: 'gemini-2.5-flash',
   groq: 'llama-3.3-70b-versatile',
-  mistral: 'mistral-small-latest',
-  openrouter: 'meta-llama/llama-3.3-70b-instruct',
-  xai: 'grok-3-mini',
-  together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+  mistral: 'mistral-large-latest',
+  openrouter: 'auto',
+  xai: 'grok-4',
+  together: 'moonshotai/Kimi-K2.5',
   deepseek: 'deepseek-chat',
-  huggingface: 'meta-llama/Llama-3.3-70B-Instruct',
+  huggingface: 'deepseek-ai/DeepSeek-R1',
   chutes: 'deepseek-ai/DeepSeek-V3-0324',
-  volcengine: 'doubao-1.5-pro-32k',
-  byteplus: 'doubao-1.5-pro-32k',
-  minimax: 'MiniMax-M1',
-  moonshot: 'moonshot-v1-auto',
+  volcengine: 'ark-code-latest',
+  byteplus: 'ark-code-latest',
+  minimax: 'MiniMax-M2.5',
+  moonshot: 'kimi-k2.5',
   qwen: 'qwen-plus',
   cerebras: 'llama-3.3-70b',
   nvidia: 'nvidia/llama-3.1-nemotron-70b-instruct',
-  venice: 'llama-3.3-70b',
-  litellm: 'gpt-4o-mini',
-  cloudflare: 'gpt-4o-mini',
-  kilocode: 'meta-llama/llama-3.3-70b-instruct',
-  qianfan: 'ernie-4.0-8k',
-  'vercel-ai': 'gpt-4o-mini',
-  synthetic: 'claude-haiku-4-5-20251001',
-  xiaomi: 'MiLM-1',
+  venice: 'kimi-k2-5',
+  litellm: 'claude-opus-4-6',
+  cloudflare: 'claude-sonnet-4-5',
+  kilocode: 'kilo/auto',
+  qianfan: 'deepseek-v3.2',
+  'vercel-ai': 'anthropic/claude-opus-4.6',
+  synthetic: 'hf:MiniMaxAI/MiniMax-M2.5',
+  xiaomi: 'mimo-v2-flash',
   vllm: 'default',
-  zai: 'glm-4-flash',
-  copilot: 'gpt-4o-mini',
-  'opencode-zen': 'gpt-4o-mini',
-  custom: 'gpt-4o-mini',
+  zai: 'glm-5',
+  copilot: 'gpt-5.4',
+  'opencode-zen': 'claude-opus-4-6',
+  custom: 'gpt-5.4',
 };
 
 const BASE_URLS: Record<string, string> = {
@@ -81,7 +81,7 @@ export class CloudClient implements LLMClient {
     }
     this.provider = config.provider;
     this.isAnthropic = config.api_style === 'anthropic' || (config.provider === 'anthropic' && config.api_style !== 'openai');
-    this.model = model || DEFAULT_MODELS[config.provider] || 'gpt-4o-mini';
+    this.model = model || DEFAULT_MODELS[config.provider] || 'gpt-5.4';
     this.baseUrl = baseUrl || config.base_url || BASE_URLS[config.provider] || '';
 
     if (this.isAnthropic && !config.base_url && !baseUrl) {
