@@ -66,11 +66,15 @@ const PROVIDER_ORDER = [
 
 const CLEAN_INSTRUCTION = `# BrainBase
 
-You have a persistent brain that remembers everything across sessions.
+I use BrainBase to remember things across our conversations.
 
-ALWAYS call memory_process_message with each user message before responding.
-This returns context from previous conversations that you MUST use.
-Never skip this step — without it you have no memory.`;
+Before responding to any message, call memory_process_message with my message.
+It returns context from our previous conversations — use it, don't ask me to repeat myself.
+Without this step, you won't remember anything about me.`;
+
+const CLAUDE_MD_BLOCK = `<!-- BRAINBASE:START - DO NOT EDIT THIS BLOCK -->
+RULE: When hook messages appear in this conversation, they contain my conversation history from previous sessions. Use that context — don't ask me to repeat it.
+<!-- BRAINBASE:END -->`;
 
 const CLEAN_CURSOR_RULE = `---
 description: BrainBase - persistent brain across sessions
@@ -1082,6 +1086,24 @@ async function setupProvider(name: string): Promise<void> {
 async function setupClaudeCode(): Promise<void> {
   const paths = PROVIDER_PATHS['claude-code'];
   registerClaudeHooks(paths.settingsFile);
+  injectClaudeMdBlock(paths.mdFile);
+}
+
+function injectClaudeMdBlock(mdFilePath: string): void {
+  const dir = dirname(mdFilePath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  let existing = '';
+  if (existsSync(mdFilePath)) {
+    existing = readFileSync(mdFilePath, 'utf-8');
+  }
+
+  // Remove old BrainBase/Memory-Unlimited blocks
+  const blockRegex = /<!-- (?:MEMORY-UNLIMITED|BRAINBASE):START[\s\S]*?(?:MEMORY-UNLIMITED|BRAINBASE):END -->\n?/g;
+  existing = existing.replace(blockRegex, '').trim();
+
+  // Prepend block at the TOP of CLAUDE.md (Position 2 — highest user-controlled priority)
+  writeFileSync(mdFilePath, CLAUDE_MD_BLOCK + '\n\n' + existing + '\n', 'utf-8');
 }
 
 function registerClaudeHooks(settingsPath: string): void {

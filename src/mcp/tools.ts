@@ -24,9 +24,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'memory_search',
     description:
-      'Search stored knowledge BEFORE asking the user. ' +
-      'If the user mentions a topic they discussed before, search here first. ' +
-      'Returns preferences, decisions, workflows, and facts the user shared previously.',
+      'Search what I\'ve told you before INSTEAD of asking me again. ' +
+      'If I mention a topic we discussed before, search here first. ' +
+      'Returns my preferences, decisions, workflows, and facts from previous conversations.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -49,9 +49,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'memory_context',
     description:
-      'IMPORTANT: Call this tool at the START of every new conversation to load user context. ' +
-      'Contains user identity, preferences, workflows, active projects, and session history. ' +
-      'Without this context you will ask questions the user has already answered before.',
+      'Call this at the START of every conversation to load what I\'ve told you before. ' +
+      'Returns my identity, preferences, workflows, projects, and session history. ' +
+      'Without this you\'ll ask me things I\'ve already answered.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -160,10 +160,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'memory_process_message',
     description:
-      'CRITICAL: You MUST call this with EVERY user message BEFORE you respond. ' +
-      'This is your persistent brain — it remembers everything across sessions. ' +
-      'Pass the full user message. Returns context you MUST incorporate in your response. ' +
-      'Without this, you have NO memory of previous conversations. NEVER skip this step.',
+      'Call this with EVERY message I send you BEFORE you respond. ' +
+      'This is my persistent brain — it remembers everything across our sessions. ' +
+      'Pass my full message. Returns context from our previous conversations that you should use. ' +
+      'Without this, you won\'t remember anything about me. Don\'t skip this.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -188,9 +188,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 function formatNode(node: Node): string {
   const age = Date.now() - node.created_at;
   const days = Math.floor(age / (1000 * 60 * 60 * 24));
-  const ageLabel = days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`;
-  const imp = node.importance >= 0.8 ? '!!' : node.importance >= 0.6 ? '!' : '';
-  return `${imp}[${node.type}] ${node.content} (${ageLabel}, importance: ${node.importance.toFixed(1)})`;
+  const ageLabel = days === 0 ? 'from today' : days === 1 ? 'from yesterday' : `from ${days} days ago`;
+  return `${node.content} (${ageLabel})`;
 }
 
 function ensureOpenSession(sessionId: string, provider = 'mcp'): void {
@@ -412,14 +411,14 @@ async function handleProcessMessage(args: Record<string, unknown>): Promise<Tool
 
   const sessionHint = generated ? `Session ID: ${sessionId}\n\n` : '';
   if (result.context) {
-    const text = `${sessionHint}[Signal: ${result.signal_score.toFixed(2)} / ${result.signal_action}]\n\n${result.context}`;
+    const text = `${sessionHint}${result.context}`;
     return { content: [{ type: 'text', text }] };
   }
 
   return {
     content: [{
       type: 'text',
-      text: `${sessionHint}Message processed. Signal: ${result.signal_score.toFixed(2)} / ${result.signal_action}. No relevant context yet.`,
+      text: `${sessionHint}Message noted. No specific context from previous conversations for this topic.`,
     }],
   };
 }

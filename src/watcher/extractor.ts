@@ -218,7 +218,7 @@ function buildExtractionPrompt(
   try {
     const knowledgeProfile = generateContext('MINIMAL');
     const hasKnowledge = knowledgeProfile &&
-      knowledgeProfile !== 'No memories stored yet. The system learns automatically from sessions.';
+      knowledgeProfile !== 'This is a new brain. Memories build automatically from our conversations.';
 
     if (hasKnowledge) {
       nodesContext = `\nWhat you already know about this person:\n${knowledgeProfile}\n\nIMPORTANT: The above is what you ALREADY know. Do NOT re-extract or create facts about things above. Focus ONLY on what is NEW in the user's message below.\n`;

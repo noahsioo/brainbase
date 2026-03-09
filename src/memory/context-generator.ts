@@ -18,6 +18,7 @@ import { savePrediction } from '../regulation/comparator.js';
 // V8-1: getStressLevel, getTradeoffState entfernt (Budget-Modifier vereinfacht)
 import { getWorkingMemory } from './working-memory.js';
 import { generateSpecificImpulse, type HungerZone } from './knowledge-hunger.js';
+import { toFirstPerson } from '../utils/first-person.js';
 import {
   getSessionAttentionState,
   getSessionContextSignal,
@@ -718,7 +719,7 @@ function buildEntityProfileSlot(
   );
 
   for (const node of orphanNodes.slice(0, 3)) {
-    const line = `- ${node.content}\n`;
+    const line = `- ${toFirstPerson(node.content, userName)}\n`;
     if (estimateTokens(text + line) > budget) break;
     text += line;
   }
@@ -762,6 +763,8 @@ function buildEntityProfileSlot(
 }
 
 function buildLegacyCoreSlot(budget: number, sessionTopic?: string, sessionId?: string): string {
+  const userName = getUserName();
+
   if (sessionId) {
     const { activatedNodes, activatedNodeIds, entityHints } = getSessionProfileHints(sessionId);
     const sessionMeaningful = activatedNodes.filter(node =>
@@ -774,7 +777,7 @@ function buildLegacyCoreSlot(budget: number, sessionTopic?: string, sessionId?: 
 
     let sessionText = '## About the User\n';
     for (const node of sessionMeaningful.slice(0, 4)) {
-      const line = `- ${node.content}\n`;
+      const line = `- ${toFirstPerson(node.content, userName)}\n`;
       if (estimateTokens(sessionText + line) > budget) break;
       sessionText += line;
     }
@@ -808,7 +811,7 @@ function buildLegacyCoreSlot(budget: number, sessionTopic?: string, sessionId?: 
 
   let text = '## About the User\n';
   for (const node of meaningful) {
-    const line = `- ${node.content}\n`;
+    const line = `- ${toFirstPerson(node.content, userName)}\n`;
     if (estimateTokens(text + line) > budget) break;
     text += line;
   }
@@ -936,7 +939,13 @@ function buildWorkingMemorySlot(budget: number, sessionId?: string): string {
   }
 
   if (memory.open_questions.length > 0) {
-    lines.push(`Open: ${memory.open_questions.slice(0, 2).join(' | ')}`);
+    // V16: Only include real questions, not raw user text dumps
+    const realQuestions = memory.open_questions
+      .filter(q => q.endsWith('?') || q.length < 60)
+      .slice(0, 2);
+    if (realQuestions.length > 0) {
+      lines.push(`Open: ${realQuestions.join(' | ')}`);
+    }
   }
 
   if (lines.length === 0) return '';
@@ -2228,7 +2237,7 @@ export function generateContext(
 
   // 14.1+14.2: Provider-specific budget scaling + format
   let contextStyle: ContextStyle = 'narrative';
-  let maxChunks = 7;
+  let maxChunks = 5; // V16: fewer, more focused chunks = LLM actually reads them
   if (provider) {
     const profile = readOnly ? peekProviderProfile(provider) : getProviderProfile(provider);
     contextStyle = profile.context_style;
@@ -2280,11 +2289,8 @@ export function generateContext(
 
   const sections: string[] = [];
 
-  // Scene — kompakter Situations-Header
-  if (slots.showScene) {
-    const scene = buildSceneSlot(100, currentTopic, effectiveCurrentMood, effectiveTaskMode, sessionId, effectiveContextSignal);
-    if (scene) sections.push(scene);
-  }
+  // V16: Scene slot removed — was metadata noise ("Sidewalks — videobeschreibung (fokussiert)")
+  // that LLMs treated as debug info and ignored the entire context block.
 
   // V13: Life Context — nur wenn relevant (scored)
   const lifeEntityNames = sessionWorkingMemory
@@ -2357,7 +2363,7 @@ export function generateContext(
   const dedupedSections = deduplicateContextSections(sections);
 
   if (dedupedSections.length === 0) {
-    return 'No memories stored yet. The system learns automatically from sessions.';
+    return 'This is a new brain. Memories build automatically from our conversations.';
   }
 
   // 11.5: Save context node IDs for Cerebellum feedback
@@ -2460,7 +2466,8 @@ function integrateContext(
 
   const body = chunks.slice(0, maxChunks).join('\n\n');
 
-  return `IMPORTANT — Verified knowledge about this user:\n\n${body}\n\nIMPORTANT: The above is VERIFIED knowledge from previous conversations. Use it proactively — do not wait to be asked. NEVER re-ask for information already stated above.`;
+  // V16: Raw facts only — frameContextAsResponse() in user-prompt.ts adds the bridge framing
+  return body;
 }
 
 function buildSceneBriefing(sessionId?: string, currentMood?: string, taskMode?: string): string | null {
@@ -2538,7 +2545,7 @@ function sectionToStructured(section: string): string | null {
     const compact = bullets.map(b => {
       return b.replace(/^\*\*(.+?)\*\*/, '$1').replace(/\s+/g, ' ').trim();
     });
-    return `You know: ${compact.join(' | ')}`;
+    return `Context: ${compact.join(' | ')}`;
   }
 
   if (header.startsWith('On Topic:')) {
@@ -2605,7 +2612,7 @@ function sectionToNarrative(section: string): string | null {
     return buildWarningNarrative(bulletPoints);
   }
   if (header === 'Reminder') {
-    return 'Reminder: ' + bulletPoints.join('. ') + '.';
+    return 'Don\'t forget: ' + bulletPoints.join('. ') + '.';
   }
   if (header.startsWith('Note: Contradictions')) {
     return 'Warning, contradiction: ' + bulletPoints.join('. ') + '. Clarify which info is current.';
@@ -2619,7 +2626,7 @@ function sectionToNarrative(section: string): string | null {
 
 function buildIdentityNarrative(header: string, points: string[]): string {
   const name = header.replace('About ', '').replace('User Profile', '').trim() || 'the user';
-  const sentences: string[] = [`You are talking to ${name}.`];
+  const sentences: string[] = [`I'm ${name}.`];
 
   for (const point of points) {
     const colonIdx = point.indexOf(':');
@@ -2627,7 +2634,7 @@ function buildIdentityNarrative(header: string, points: string[]): string {
       const label = point.substring(0, colonIdx).trim();
       const value = point.substring(colonIdx + 1).trim();
       const verb = label.charAt(0).toLowerCase() + label.slice(1);
-      sentences.push(`${name} ${verb} ${value}.`);
+      sentences.push(`I ${verb} ${value}.`);
     } else {
       sentences.push(point.endsWith('.') ? point : point + '.');
     }
@@ -2658,7 +2665,7 @@ function buildActiveNarrative(points: string[]): string {
     }
   }
 
-  return 'You know: ' + parts.join('. ') + '.';
+  return 'Things I\'ve mentioned: ' + parts.join('. ') + '.';
 }
 
 function buildGraphNarrative(header: string, points: string[]): string {
@@ -2677,7 +2684,7 @@ function buildGraphNarrative(header: string, points: string[]): string {
   }
 
   if (relations.length === 0) return '';
-  return `You know about ${topic}: ${relations.join(', ')}.`;
+  return `About ${topic}: ${relations.join(', ')}.`;
 }
 
 function buildSessionNarrative(points: string[]): string {

@@ -2,6 +2,7 @@ import { getActivatedNodes } from '../memory/activation.js';
 import { getDb } from '../memory/store.js';
 import { getSessionRuntimeStateSnapshot } from '../memory/session-runtime-state.js';
 import { getWorkingMemory } from '../memory/working-memory.js';
+import { refreshClaudeMdContext } from '../memory/hot.js';
 
 interface PreCompactInput {
   session_id?: string;
@@ -35,12 +36,12 @@ export async function handlePreCompact(input: PreCompactInput = {}): Promise<voi
     }
 
     if (!sessionId) {
-      const output = JSON.stringify({ systemMessage: 'IMPORTANT — Conversation was compressed. No session-specific state available.' });
+      const output = JSON.stringify({ systemMessage: 'Our conversation was compressed. Continue where we left off.' });
       process.stdout.write(output);
       return;
     }
 
-    const parts: string[] = ['IMPORTANT — Conversation was compressed. Here is what you were discussing:'];
+    const parts: string[] = ['Our conversation was compressed. Here\'s what we were discussing:'];
 
     // Build narrative reconnect state
     const stateParts: string[] = [];
@@ -80,18 +81,21 @@ export async function handlePreCompact(input: PreCompactInput = {}): Promise<voi
         parts.push(`Key entities: ${activeEntities.join(', ')}`);
       }
       if (activeKnowledge.length > 0) {
-        parts.push(`You know: ${activeKnowledge.join('. ')}`);
+        parts.push(`Context: ${activeKnowledge.join('. ')}`);
       }
     }
 
-    parts.push('\nContinue the conversation naturally. Use the above context — NEVER re-ask for it.');
+    parts.push('\nContinue where we left off. Don\'t ask me to repeat any of the above.');
 
     const briefing = parts.join('\n');
 
     const output = JSON.stringify({ systemMessage: briefing });
     process.stdout.write(output);
+
+    // V17: After compact, refresh CLAUDE.md so lost context stays in invisible channel
+    try { refreshClaudeMdContext(); } catch { /* non-fatal */ }
   } catch {
-    const fallback = JSON.stringify({ systemMessage: 'IMPORTANT — Conversation was compressed. Continue naturally.' });
+    const fallback = JSON.stringify({ systemMessage: 'Our conversation was compressed. Continue where we left off.' });
     process.stdout.write(fallback);
   }
 }

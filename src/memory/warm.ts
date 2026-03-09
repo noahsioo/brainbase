@@ -1,6 +1,8 @@
 import { searchNodes, setQueryEmbedding, type Node } from './store.js';
 import { activateByQuery, getActivatedNodes } from './activation.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
+import { getUserName } from './context-generator.js';
+import { toFirstPerson } from '../utils/first-person.js';
 
 const WARM_EXCLUDED_TYPES = new Set(['failure', 'system_knowledge', 'auto_topic', 'example']);
 
@@ -54,21 +56,22 @@ export function buildWarmMemoryBlock(topic: string, nodes: Node[]): string {
   const parts: string[] = [];
 
   if (entityNodes.length > 0) {
-    parts.push(`Key concepts for ${topic}: ${entityNodes.map(n => n.content).join(', ')}.`);
+    parts.push(`Related to ${topic}: ${entityNodes.map(n => n.content).join(', ')}.`);
   }
 
+  const userName = getUserName();
   for (const n of knowledgeNodes) {
-    // Skip overly long episode blocks — summarize instead
-    if (n.type === 'episode' && n.content.length > 200) {
-      parts.push(n.content.substring(0, 197) + '...');
+    const content = toFirstPerson(n.content, userName);
+    if (n.type === 'episode' && content.length > 200) {
+      parts.push(content.substring(0, 197) + '...');
     } else {
-      parts.push(n.content);
+      parts.push(content);
     }
   }
 
   if (parts.length === 0) return '';
 
-  return `You know about ${topic}:\n${parts.map(p => `- ${p}`).join('\n')}\n`;
+  return `About ${topic}:\n${parts.map(p => `- ${p}`).join('\n')}\n`;
 }
 
 export function getWarmMemoryForTopic(topic: string, sessionId?: string): string {
