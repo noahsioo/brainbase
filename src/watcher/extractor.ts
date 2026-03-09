@@ -279,8 +279,9 @@ function isSubstantiveMessage(message: string): boolean {
   const commandPatterns = /^(mach|fix|aender|änder|build|run|deploy|push|commit|install|update|start|stop|delete|remove|erstell|zeig|show|list|check|test)\b/i;
   if (words.length <= 5 && commandPatterns.test(lastMessage.trim())) {
     // V8-6: Wenn ein Eigenname/Tech-Term enthalten ist → trotzdem substantive
-    const TECH_PATTERN = /[A-Z][a-z]+[A-Z]|[A-Z]{2,}|[a-z]+\.[a-z]+|typescript|python|react|node|api|sdk|cli|llm|gpu|cpu|sql|css|html|json|yaml|xml/i;
-    const hasEntity = words.some(w => TECH_PATTERN.test(w) && w.length > 2);
+    const CASE_SENSITIVE = /[A-Z][a-z]+[A-Z]|[A-Z]{2,}|[a-z]+\.[a-z]+/;
+    const TECH_TERMS = /^(typescript|python|react|node|api|sdk|cli|llm|gpu|cpu|sql|css|html|json|yaml|xml|supabase|firebase|docker|redis|postgres|graphql|webpack|vite|nextjs|nuxt|svelte|angular|vue|rust|golang|swift|kotlin)$/i;
+    const hasEntity = words.some(w => w.length > 2 && (CASE_SENSITIVE.test(w) || TECH_TERMS.test(w)));
     if (!hasEntity) return false;
   }
 
