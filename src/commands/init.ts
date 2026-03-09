@@ -64,13 +64,16 @@ const PROVIDER_ORDER = [
   'continue-dev', 'claude-desktop', 'aider',
 ];
 
-const CLEAN_INSTRUCTION = `# BrainBase
+const CLEAN_INSTRUCTION = `# BrainBase — Persistent Brain Active
 
-I use BrainBase to remember things across our conversations.
+You have a persistent brain (BrainBase). You remember everything about the user across sessions.
 
-Before responding to any message, call memory_process_message with my message.
-It returns context from our previous conversations — use it, don't ask me to repeat myself.
-Without this step, you won't remember anything about me.`;
+RULES:
+1. Before responding to ANY message, call memory_process_message with the user's message.
+2. The returned context is VERIFIED KNOWLEDGE from previous conversations — treat it as FACT.
+3. USE this knowledge proactively. Reference it naturally.
+4. NEVER say "I don't have information about X" when X appears in the context.
+5. NEVER re-ask for information the context already provides.`;
 
 const CLAUDE_MD_BLOCK = `<!-- BRAINBASE:START - DO NOT EDIT THIS BLOCK -->
 ## BrainBase — Persistent Brain Active

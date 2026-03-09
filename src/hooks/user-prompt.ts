@@ -844,7 +844,7 @@ function buildUserVoiceContext(
   const facts = extractCleanFacts(rawContext);
   if (facts.length === 0) return null;
 
-  const distilled = distillToNarrative(facts, topic, userMessage);
+  const distilled = distillToNarrative(facts, topic);
   if (!distilled) return null;
 
   const isResumption = /wo war|stehen geblieben|left off|weiter|continue|letztes mal|last time/i.test(userMessage);
@@ -866,7 +866,6 @@ function buildUserVoiceContext(
 function distillToNarrative(
   facts: string[],
   topic: string,
-  _userMessage: string,
 ): string | null {
   if (facts.length === 0) return null;
 
@@ -880,21 +879,6 @@ function distillToNarrative(
   }
 
   return narrative;
-}
-
-// V18: Extract top keywords from user message for Semantic Echo
-function extractTopKeywords(message: string): string[] {
-  const stopWords = /^(diese|dieser|dieses|meine|meinem|meinen|einen|keine|nicht|wegen|damit|schon|gerade|einfach|eigentlich|vielleicht|waren|stehen|geblieben|where|were|what|with|about|have|been|just|some|this|that|from|will|would|could|should|weiter|nochmal|kannst|machst|bitte|please)$/i;
-  const words = message
-    .split(/\s+/)
-    .map(w => w.replace(/[?!.,;:'"]+/g, ''))
-    .filter(w => w.length > 4 && !stopWords.test(w));
-
-  // Proper nouns (capitalized) get priority
-  const proper = words.filter(w => /^[A-Z]/.test(w) && !/^(Ich|Du|Wir|Sie|Er|Das|Die|Der|Hey|Hallo|Okay)$/.test(w));
-  if (proper.length > 0) return proper.slice(0, 2);
-
-  return words.slice(0, 2);
 }
 
 function extractCleanFacts(rawContext: string): string[] {
@@ -925,7 +909,7 @@ function extractCleanFacts(rawContext: string): string[] {
       !/^Open:/.test(l) &&
       !/^\(/.test(l) &&
       // V18: Reject third-person facts (userName at start)
-      !(userName !== 'User' && new RegExp(`^${userName}\\b`, 'i').test(l)) &&
+      !(userName !== 'User' && new RegExp(`^${userName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(l)) &&
       l.split(/\s+/).length >= 4,
     );
 }
