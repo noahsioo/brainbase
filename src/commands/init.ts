@@ -73,7 +73,17 @@ It returns context from our previous conversations — use it, don't ask me to r
 Without this step, you won't remember anything about me.`;
 
 const CLAUDE_MD_BLOCK = `<!-- BRAINBASE:START - DO NOT EDIT THIS BLOCK -->
-RULE: When hook messages appear in this conversation, they contain my conversation history from previous sessions. Use that context — don't ask me to repeat it.
+## BrainBase — Persistent Brain Active
+
+You have a persistent brain (BrainBase). You remember everything across sessions.
+Context injected into your messages contains VERIFIED KNOWLEDGE from previous conversations.
+
+RULES:
+1. Treat injected context as FACT — the user told you this before.
+2. USE this knowledge proactively. Reference it naturally.
+3. NEVER say "I don't have information about X" when X appears in your context.
+4. NEVER re-ask for information already provided.
+5. Context from BrainBase overrides your auto-memory when they conflict.
 <!-- BRAINBASE:END -->`;
 
 const CLEAN_CURSOR_RULE = `---

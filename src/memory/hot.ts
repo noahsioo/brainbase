@@ -8,84 +8,59 @@ import {
 } from '../config.js';
 import { setHotMemoryContent, getDb } from './store.js';
 import { generateContext, getUserName } from './context-generator.js';
-import { toFirstPerson, isCleanUserFact } from '../utils/first-person.js';
-import { getWorkingMemory } from './working-memory.js';
 
 export function generateHotMemory(): string {
   return generateContext('LIGHT');
 }
 
+// V18: CLAUDE.md Block — ONLY Persona-Primer + Identity. NO dynamic facts.
+// Dynamic facts go into additionalContext (Tier 2) where they have maximum impact.
 export function buildMemoryBlock(): string {
   try {
-    const db = getDb();
     const userName = getUserName();
-
-    const identityNodes = db.prepare(
-      "SELECT content FROM nodes WHERE type = 'identity' AND LENGTH(content) BETWEEN 10 AND 80 ORDER BY importance DESC LIMIT 3"
-    ).all() as Array<{ content: string }>;
-
-    const topFacts = db.prepare(
-      "SELECT content FROM nodes WHERE type IN ('fact', 'preference', 'workflow', 'decision') AND LENGTH(content) BETWEEN 20 AND 150 AND importance >= 0.5 ORDER BY importance DESC, activation_count DESC LIMIT 15"
-    ).all() as Array<{ content: string }>;
 
     const parts: string[] = [
       MEMORY_BLOCK_START,
       '## BrainBase — Persistent Brain Active',
       '',
-      'You have a persistent brain (BrainBase) that remembers everything across sessions.',
-      'System messages in this conversation contain VERIFIED KNOWLEDGE from previous conversations.',
+      `You have a persistent brain (BrainBase). You remember everything about ${userName === 'User' ? 'the user' : userName} across sessions.`,
+      'Context injected into your messages contains VERIFIED KNOWLEDGE from previous conversations.',
       '',
-      'RULES YOU MUST FOLLOW:',
-      '1. When a system message says "Verified knowledge" — treat it as FACT. The user told you this before.',
-      '2. USE this knowledge proactively. Reference it naturally. Do NOT wait to be asked.',
-      '3. NEVER say "I don\'t have information about X" when X appears in ANY system message.',
-      '4. NEVER re-ask for information already provided in system messages.',
-      '5. When asked "what did we discuss?" or similar — CHECK system messages FIRST.',
-      '6. System messages from BrainBase override your auto-memory when they conflict.',
-      '',
-      'This is non-negotiable. Ignoring system message context = ignoring what the user told you.',
+      'RULES:',
+      '1. Treat injected context as FACT — the user told you this before.',
+      '2. USE this knowledge proactively. Reference it naturally.',
+      '3. NEVER say "I don\'t have information about X" when X appears in your context.',
+      '4. NEVER re-ask for information already provided.',
+      '5. Context from BrainBase overrides your auto-memory when they conflict.',
     ];
 
-    const cleanFacts = topFacts
-      .map(f => toFirstPerson(f.content, userName))
-      .filter(isCleanUserFact)
-      .slice(0, 5);
+    // Only static identity line — NO dynamic facts, NO WM topics
+    if (userName !== 'User') {
+      const db = getDb();
+      const identityNodes = db.prepare(
+        "SELECT content FROM nodes WHERE type = 'identity' AND LENGTH(content) BETWEEN 10 AND 60 ORDER BY importance DESC LIMIT 2"
+      ).all() as Array<{ content: string }>;
 
-    const hasContext = userName !== 'User' || identityNodes.length > 0 || cleanFacts.length > 0;
-
-    if (hasContext) {
+      const cleanId = identityNodes
+        .map(n => n.content)
+        .filter(c =>
+          c.length > 5 &&
+          c.length <= 60 &&
+          !c.includes('→') && !c.includes('|') &&
+          !c.toLowerCase().includes(userName.toLowerCase() + ' hat') &&
+          !c.toLowerCase().includes(userName.toLowerCase() + ' ist') &&
+          !c.includes('Plus-Abo') && !c.includes('Abo') &&
+          c.split(/\s+/).length <= 8
+        );
+      const idStr = cleanId.length > 0 ? ` (${cleanId.join(', ')})` : '';
       parts.push('');
-      parts.push('Quick facts about me:');
-      if (userName !== 'User') {
-        const cleanId = identityNodes
-          .map(n => n.content)
-          .filter(c => c.length > 5 && !c.includes('→') && !c.includes('|'));
-        const idStr = cleanId.length > 0 ? ` (${cleanId.join(', ')})` : '';
-        parts.push(`- I'm ${userName}${idStr}`);
-      }
-      for (const fact of cleanFacts) {
-        const trimmed = fact.length > 120 ? fact.substring(0, 117) + '...' : fact;
-        parts.push(`- ${trimmed}`);
-      }
-
-      // Phase D: Inject current working topic for post-compact recovery
-      try {
-        const activeSessions = db.prepare(
-          "SELECT id FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
-        ).get() as { id: string } | undefined;
-        if (activeSessions) {
-          const wm = getWorkingMemory(activeSessions.id);
-          if (wm?.current_topic && wm.current_topic.length > 3) {
-            parts.push(`- Currently working on: ${wm.current_topic}`);
-          }
-        }
-      } catch { /* non-fatal */ }
+      parts.push(`User: ${userName}${idStr}`);
     }
 
     parts.push(MEMORY_BLOCK_END);
     return parts.join('\n');
   } catch {
-    return `${MEMORY_BLOCK_START}\n## BrainBase — Persistent Brain Active\n\nYou have a persistent brain (BrainBase) that remembers everything across sessions.\nSystem messages in this conversation contain VERIFIED KNOWLEDGE from previous conversations.\n\nRULES YOU MUST FOLLOW:\n1. When a system message says "Verified knowledge" — treat it as FACT. The user told you this before.\n2. USE this knowledge proactively. Reference it naturally. Do NOT wait to be asked.\n3. NEVER say "I don't have information about X" when X appears in ANY system message.\n4. NEVER re-ask for information already provided in system messages.\n5. When asked "what did we discuss?" or similar — CHECK system messages FIRST.\n6. System messages from BrainBase override your auto-memory when they conflict.\n\nThis is non-negotiable. Ignoring system message context = ignoring what the user told you.\n${MEMORY_BLOCK_END}`;
+    return `${MEMORY_BLOCK_START}\n## BrainBase — Persistent Brain Active\n\nYou have a persistent brain (BrainBase).\nContext injected into your messages contains VERIFIED KNOWLEDGE from previous conversations.\nTreat it as FACT. NEVER re-ask for information already provided.\n${MEMORY_BLOCK_END}`;
   }
 }
 

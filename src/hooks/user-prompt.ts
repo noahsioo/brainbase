@@ -1,6 +1,6 @@
 import { addToRawBuffer, createSession, getDb, getSession, setQueryEmbedding, updateNode, searchNodes } from '../memory/store.js';
 import { activateByEntities, applyAttentionSpotlight, primeActivations, applySTDP, getCurrentlyActivatedEntityIds, getLastSTDPEntities, setLastSTDPEntities, setCurrentEncodingContext, setSystemMode, setCurrentTaskMode, applyDisinhibition, clearDisinhibitionTargets, startNewCoherenceRound, getSessionActivationValue, setSessionActivationValue, getActivatedNodes } from '../memory/activation.js';
-import { generateContext, setSessionTopicEmbedding, setSessionMessageEmbedding, type DetailMode } from '../memory/context-generator.js';
+import { generateContext, setSessionTopicEmbedding, setSessionMessageEmbedding, getUserName, type DetailMode } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
 import { getConfig } from '../config.js';
 import { extractFromPrompt } from '../extraction/code-extractor.js';
@@ -13,7 +13,7 @@ import {
 import { GATE_HEBBIAN, GATE_LLM } from '../signal/signal-strength.js';
 import { processThalamic, deriveSystemMode } from '../signal/thalamus.js';
 import { detectFeedbackSignal, detectMood, setCurrentMood, applyFeedbackToRecentNodes, applyFeedbackOutcome, applySomaticMarkers, applyContextFeedback, detectEmpathyMode, trackProviderFeedback } from '../signal/echo.js';
-import { updateHotMemoryInDb, refreshClaudeMdContext } from '../memory/hot.js';
+import { updateHotMemoryInDb } from '../memory/hot.js';
 import { checkProspectiveTriggers, getUpcomingReminders, scoreReminderRelevance, formatProactiveReminder } from '../memory/prospective.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { detectEmotionBypass } from '../senses/emotion-sense.js';
@@ -866,13 +866,9 @@ function buildUserVoiceContext(
 function distillToNarrative(
   facts: string[],
   topic: string,
-  userMessage: string,
+  _userMessage: string,
 ): string | null {
   if (facts.length === 0) return null;
-
-  // Semantic Echo: mirror keywords from user message at the start
-  const topKeywords = extractTopKeywords(userMessage);
-  const keywordPrefix = topKeywords.length > 0 ? topKeywords[0] + ' — ' : '';
 
   // Max 3 most important facts, combined into narrative sentences
   const topFacts = facts.slice(0, 3);
@@ -880,17 +876,18 @@ function distillToNarrative(
 
   // Recency: topic at the end (Recency Bias)
   if (topic && topic !== 'general' && !narrative.toLowerCase().includes(topic.toLowerCase())) {
-    return `${keywordPrefix}${narrative} Aktuelles Thema: ${topic}.`;
+    return `${narrative} Aktuelles Thema: ${topic}.`;
   }
 
-  return keywordPrefix ? `${keywordPrefix}${narrative}` : narrative;
+  return narrative;
 }
 
 // V18: Extract top keywords from user message for Semantic Echo
 function extractTopKeywords(message: string): string[] {
-  const stopWords = /^(diese|dieser|dieses|meine|meinem|meinen|einen|keine|nicht|wegen|damit|schon|gerade|einfach|eigentlich|vielleicht|waren|stehen|geblieben|where|were|what|with|about|have|been|just|some|this|that|from|will|would|could|should)$/i;
+  const stopWords = /^(diese|dieser|dieses|meine|meinem|meinen|einen|keine|nicht|wegen|damit|schon|gerade|einfach|eigentlich|vielleicht|waren|stehen|geblieben|where|were|what|with|about|have|been|just|some|this|that|from|will|would|could|should|weiter|nochmal|kannst|machst|bitte|please)$/i;
   const words = message
     .split(/\s+/)
+    .map(w => w.replace(/[?!.,;:'"]+/g, ''))
     .filter(w => w.length > 4 && !stopWords.test(w));
 
   // Proper nouns (capitalized) get priority
@@ -902,6 +899,7 @@ function extractTopKeywords(message: string): string[] {
 
 function extractCleanFacts(rawContext: string): string[] {
   const lines = rawContext.split('\n');
+  const userName = getUserNameForFacts();
   return lines
     .map(l => l.replace(/^[-*•]\s*/, '').trim())
     .filter(l =>
@@ -915,15 +913,25 @@ function extractCleanFacts(rawContext: string): string[] {
       !l.startsWith('I don\'t want to repeat') &&
       !l.startsWith('Don\'t ask me') &&
       !l.startsWith('Context:') &&
+      !l.startsWith('You know') &&
+      !l.startsWith('the User:') &&
       !l.includes('fokussiert') &&
       !l.includes('session start') &&
       !l.includes('VERIFIED') &&
       !l.includes('previous sessions') &&
+      !l.includes('injected context') &&
+      !l.includes('BrainBase') &&
       !/^\w+ — \w+/.test(l) &&
       !/^Open:/.test(l) &&
       !/^\(/.test(l) &&
+      // V18: Reject third-person facts (userName at start)
+      !(userName !== 'User' && new RegExp(`^${userName}\\b`, 'i').test(l)) &&
       l.split(/\s+/).length >= 4,
     );
+}
+
+function getUserNameForFacts(): string {
+  try { return getUserName(); } catch { return 'User'; }
 }
 
 export async function handleUserPrompt(input: UserPromptInput): Promise<void> {
@@ -939,50 +947,41 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<void> {
     if (result.context) {
       const ctx = result.context;
 
-      // V17 Stealth Mode: Push full context into CLAUDE.md (invisible, Position 2)
-      let claudeMdUpdated = false;
-      try {
-        refreshClaudeMdContext();
-        claudeMdUpdated = true;
-      } catch { /* fallback below */ }
+      // V18: CLAUDE.md refresh removed — only at SessionStart + PreCompact now
 
       const output: Record<string, unknown> = {};
+      const topic = result.topic || 'general';
 
-      // Extract only reminders/alerts for visible output (minimal footprint)
+      // V18 TIER 2: Dynamic context → additionalContext (appended to user message!)
+      // This is THE fundamental fix: additionalContext becomes part of the user message,
+      // not a system-reminder that can be ignored.
+      const userVoiceContext = buildUserVoiceContext(input.user_prompt, ctx, topic);
+      if (userVoiceContext) {
+        output.hookSpecificOutput = {
+          hookEventName: 'UserPromptSubmit' as const,
+          additionalContext: userVoiceContext,
+        };
+      }
+
+      // Reminders stay as visible systemMessage (non-critical, user wants to see these)
       const hasReminders =
         ctx.includes('Reminder for me:') ||
         ctx.includes('Coming up soon:') ||
         ctx.includes('Don\'t forget:');
 
-      if (claudeMdUpdated) {
-        // Stealth: only show reminders if any, context is in CLAUDE.md
-        if (hasReminders) {
-          const reminderSections: string[] = [];
-          if (ctx.includes('Reminder for me:')) {
-            const match = ctx.match(/Reminder for me:\n((?:- .+\n?)+)/);
-            if (match) reminderSections.push(`Reminder:\n${match[1].trim()}`);
-          }
-          if (ctx.includes('Coming up soon:')) {
-            const match = ctx.match(/Coming up soon:\n((?:- .+\n?)+)/);
-            if (match) reminderSections.push(`Coming up:\n${match[1].trim()}`);
-          }
-          if (reminderSections.length > 0) {
-            output.systemMessage = reminderSections.join('\n');
-          }
+      if (hasReminders) {
+        const reminderSections: string[] = [];
+        if (ctx.includes('Reminder for me:')) {
+          const match = ctx.match(/Reminder for me:\n((?:- .+\n?)+)/);
+          if (match) reminderSections.push(`Reminder:\n${match[1].trim()}`);
         }
-      } else {
-        // Fallback: CLAUDE.md update failed — show full context (like before)
-        const topic = result.topic || 'general';
-        const framedContext = frameContextAsResponse(input.user_prompt, result.context, topic);
-        if (framedContext) {
-          output.systemMessage = framedContext;
+        if (ctx.includes('Coming up soon:')) {
+          const match = ctx.match(/Coming up soon:\n((?:- .+\n?)+)/);
+          if (match) reminderSections.push(`Coming up:\n${match[1].trim()}`);
         }
-      }
-
-      if (result.signal_score > 0.3) {
-        output.hookSpecificOutput = {
-          additionalContext: 'I have context about this topic from previous conversations. Check brainbase memory_search if you need more detail.',
-        };
+        if (reminderSections.length > 0) {
+          output.systemMessage = reminderSections.join('\n');
+        }
       }
 
       if (output.systemMessage || output.hookSpecificOutput) {

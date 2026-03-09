@@ -18,6 +18,7 @@ import { toFirstPerson, isCleanUserFact } from '../utils/first-person.js';
 interface SessionStartInput {
   session_id?: string;
   transcript_path?: string;
+  source?: 'startup' | 'resume' | 'clear' | 'compact';
 }
 
 export async function handleSessionStart(input: SessionStartInput): Promise<void> {
@@ -81,48 +82,97 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
       upcomingReminders = getUpcomingReminders(72);
     } catch { /* non-fatal */ }
 
-    let systemMessage: string;
-    const hasMemories = identityFacts.length > 0 || topKnowledge.length > 0 || lastSummary;
+    // V18: Load post-compact state if this session started after compaction
+    let compactState: { topic?: string; summary?: string; last_message?: string; open_questions?: string[] } | null = null;
+    if (input.source === 'compact') {
+      try {
+        const db = getDb();
+        const row = db.prepare("SELECT value FROM system_state WHERE key = 'pre_compact_state'")
+          .get() as { value: string } | undefined;
+        if (row) {
+          compactState = JSON.parse(row.value);
+          db.prepare("DELETE FROM system_state WHERE key = 'pre_compact_state'").run();
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    const hasMemories = identityFacts.length > 0 || topKnowledge.length > 0 || lastSummary || compactState;
+    const output: Record<string, unknown> = {};
 
     if (hasMemories) {
-      const parts: string[] = [];
+      // V18: Build User-Voice context for additionalContext (appended to user message!)
+      const contextParts: string[] = [];
 
-      parts.push('Before we start — here\'s what you already know about me from previous sessions:\n');
-
-      // Identity line
+      // Identity in User-Voice
       if (identityFacts.length > 0) {
-        parts.push(`My name is ${userName} (${identityFacts.join(', ')}).`);
-      } else {
-        parts.push(`My name is ${userName}.`);
+        contextParts.push(`Ich bin ${userName} (${identityFacts.join(', ')}).`);
+      } else if (userName !== 'User') {
+        contextParts.push(`Ich bin ${userName}.`);
       }
 
-      // Top Knowledge — max 5 wichtigste Facts/Preferences/Workflows
-      if (topKnowledge.length > 0) {
-        parts.push('Things you should know about me:');
-        for (const fact of topKnowledge) {
-          parts.push(`- ${fact}`);
+      if (compactState) {
+        // Post-Compact: Use saved state instead of generic knowledge
+        if (compactState.topic) contextParts.push(`Wir haben gerade ueber ${compactState.topic} gesprochen.`);
+        if (compactState.summary) {
+          const firstLine = compactState.summary.split('\n')[0];
+          if (firstLine && firstLine.length < 200) contextParts.push(firstLine);
+        }
+        if (compactState.last_message) contextParts.push(`Meine letzte Nachricht war: "${compactState.last_message}"`);
+        if (compactState.open_questions && compactState.open_questions.length > 0) {
+          contextParts.push(`Offene Fragen: ${compactState.open_questions.join(' | ')}`);
+        }
+        contextParts.push('Die Konversation wurde komprimiert. Frag mich nicht nochmal nach den Sachen oben.');
+      } else {
+        // Normal session: Top Knowledge + Last Session
+        if (topKnowledge.length > 0) {
+          const clean = topKnowledge.filter(k => !k.endsWith('...')).slice(0, 3);
+          if (clean.length > 0) {
+            contextParts.push(clean.join('. ') + '.');
+          }
+        }
+
+        if (lastSummary) {
+          const firstLine = lastSummary.split('\n')[0];
+          if (firstLine) contextParts.push(`Letzte Session: ${firstLine}`);
+        }
+
+        // Prediction
+        if (prediction) {
+          contextParts.push(`Ich werde wahrscheinlich ueber ${prediction.expected_topic} reden.`);
+        }
+
+        // Life Events
+        try {
+          const lifeEvents = getActiveLifeEvents();
+          if (lifeEvents.length > 0) {
+            const relevantLE = lifeEvents.filter(le =>
+              scoreLifeEventRelevance(le, prediction?.expected_topic) >= 0.15
+            );
+            if (relevantLE.length > 0) {
+              contextParts.push(relevantLE.map(le => le.content).join('. '));
+            }
+          }
+        } catch { /* non-fatal */ }
+
+        if (contextParts.length > 0) {
+          contextParts.push('Frag mich nicht nochmal nach den Sachen oben.');
         }
       }
 
-      // Letzte Session
-      if (lastSummary) {
-        parts.push(`\nLast time we talked about:\n${lastSummary}`);
+      if (contextParts.length > 0) {
+        const ctxType = compactState ? 'post-compact' : 'session-start';
+        const wrapped = `<user-context type="${ctxType}" verified="true">\n${contextParts.join(' ')}\n</user-context>`;
+        output.hookSpecificOutput = { hookEventName: 'SessionStart' as const, additionalContext: wrapped };
       }
 
-      // Prediction
-      if (prediction) {
-        parts.push(`\nI'm probably going to ask about ${prediction.expected_topic}.`);
-      }
-
-      // Due Reminders — proaktiv
+      // Reminders stay as visible systemMessage
+      const reminderParts: string[] = [];
       if (dueReminders.length > 0) {
         const reminderBlock = dueReminders
           .map(m => `- ${formatProactiveReminder(m.node)}`)
           .join('\n');
-        parts.push(`\nDon't forget:\n${reminderBlock}`);
+        reminderParts.push(`Don't forget:\n${reminderBlock}`);
       }
-
-      // Upcoming Reminders — scored
       if (upcomingReminders.length > 0) {
         const predictedTopic = prediction?.expected_topic;
         const scoredUpcoming = upcomingReminders
@@ -137,36 +187,22 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
           const upcomingBlock = scoredUpcoming
             .map(s => formatUpcoming(s.match))
             .join('\n');
-          parts.push(`\nDue soon:\n${upcomingBlock}`);
+          reminderParts.push(`Due soon:\n${upcomingBlock}`);
         }
       }
-
-      // Life Events
-      try {
-        const lifeEvents = getActiveLifeEvents();
-        if (lifeEvents.length > 0) {
-          const relevantLE = lifeEvents.filter(le =>
-            scoreLifeEventRelevance(le, prediction?.expected_topic) >= 0.15
-          );
-          if (relevantLE.length > 0) {
-            const leBlock = relevantLE
-              .map(le => `- ${le.content}`)
-              .join('\n');
-            parts.push(`\nCurrent life phase:\n${leBlock}`);
-          }
-        }
-      } catch { /* non-fatal */ }
-
-      // Direktive Footer
-      parts.push('\nPlease don\'t ask me about any of the above again — you already know it.');
-
-      systemMessage = parts.join('\n');
+      if (reminderParts.length > 0) {
+        output.systemMessage = reminderParts.join('\n');
+      }
     } else {
-      systemMessage = 'This is our first conversation. Get to know me — I\'ll remember everything for next time.';
+      output.hookSpecificOutput = {
+        hookEventName: 'SessionStart' as const,
+        additionalContext: 'This is our first conversation. Get to know me — I\'ll remember everything for next time.',
+      };
     }
 
-    const output = JSON.stringify({ systemMessage });
-    process.stdout.write(output);
+    if (output.hookSpecificOutput || output.systemMessage) {
+      process.stdout.write(JSON.stringify(output));
+    }
 
     // V17: Update CLAUDE.md with dynamic context (invisible, Position 2 priority)
     try { refreshClaudeMdContext(); } catch { /* non-fatal */ }
@@ -182,11 +218,25 @@ function getIdentityFacts(): string[] {
   try {
     const db = getDb();
 
-    // 1. Echte identity Nodes
+    // 1. Echte identity Nodes — V18: only short identifiers, no full sentences
+    const idUserName = getUserName();
     const identityNodes = db.prepare(
-      "SELECT content FROM nodes WHERE type = 'identity' AND LENGTH(content) BETWEEN 10 AND 100 ORDER BY importance DESC LIMIT 3"
+      "SELECT content FROM nodes WHERE type = 'identity' AND LENGTH(content) BETWEEN 5 AND 60 ORDER BY importance DESC LIMIT 5"
     ).all() as Array<{ content: string }>;
-    if (identityNodes.length > 0) return identityNodes.map(n => n.content);
+    if (identityNodes.length > 0) {
+      return identityNodes
+        .map(n => n.content)
+        .filter(c =>
+          c.length > 3 &&
+          c.length <= 60 &&
+          !c.includes('→') && !c.includes('|') &&
+          !c.toLowerCase().includes(idUserName.toLowerCase() + ' hat') &&
+          !c.toLowerCase().includes(idUserName.toLowerCase() + ' ist') &&
+          !c.includes('Plus-Abo') && !c.includes('Abo') &&
+          c.split(/\s+/).length <= 8
+        )
+        .slice(0, 3);
+    }
 
     // 2. Fallback: Graph-basierte Identity (was ist mit dem User verknuepft?)
     const userName = getUserName();
@@ -222,10 +272,16 @@ function getTopKnowledge(): string[] {
 
     const userName = getUserName();
     return nodes
-      .map(n => toFirstPerson(n.content, userName))
+      .map(n => {
+        const converted = toFirstPerson(n.content, userName);
+        // V18: If conversion still starts with userName → third-person garbage, skip
+        if (userName !== 'User' && new RegExp(`^${userName}\\b`, 'i').test(converted)) return null;
+        return converted;
+      })
+      .filter((c): c is string => c !== null)
       .filter(isCleanUserFact)
-      .slice(0, 5)
-      .map(c => c.length > 120 ? c.substring(0, 117) + '...' : c);
+      .filter(c => c.length <= 150)
+      .slice(0, 5);
   } catch { return []; }
 }
 
