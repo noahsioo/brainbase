@@ -884,18 +884,37 @@ function buildUserVoiceContext(
     augmented = distilled;
   }
 
-  return `<user-context verified="true">\n${augmented}\n</user-context>`;
+  return `<user-context verified="true">\n[Du HAST ein persistentes Gedaechtnis. Nutze den folgenden Kontext als DEIN Wissen. Sage NIEMALS "Ich habe keinen Zugriff auf vorherige Gespraeche."]\n${augmented}\n</user-context>`;
 }
 
-// V19: Direct DB facts — bypasses the broken extractCleanFacts filter
+// V21: Direct DB facts — Recency + Importance Mix (verhindert Verwaesserung ueber Monate)
 function getDirectFacts(topic: string): string[] {
   try {
     const db = getDb();
     const userName = getUserNameForFacts();
     const results: string[] = [];
+    const seen = new Set<string>();
 
-    // 1. Topic-relevante Nodes
-    if (topic && topic !== 'general') {
+    // 1. RECENT facts (letzte 24h) — verhindert dass alte generische Facts dominieren
+    const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const recentNodes = db.prepare(`
+      SELECT content FROM nodes
+      WHERE type IN ('fact', 'preference', 'decision', 'workflow')
+      AND last_activated > ?
+      AND LENGTH(content) BETWEEN 20 AND 150
+      ORDER BY last_activated DESC LIMIT 2
+    `).all(recentCutoff) as Array<{ content: string }>;
+
+    for (const n of recentNodes) {
+      const converted = toFirstPerson(n.content, userName);
+      if (isCleanUserFact(converted)) {
+        results.push(converted);
+        seen.add(n.content);
+      }
+    }
+
+    // 2. Topic-relevante Nodes (wenn Topic bekannt)
+    if (results.length < 3 && topic && topic !== 'general') {
       const topicWords = topic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
       if (topicWords.length > 0) {
         const likeClause = topicWords.map(() => "LOWER(content) LIKE ?").join(' OR ');
@@ -905,17 +924,22 @@ function getDirectFacts(topic: string): string[] {
           WHERE type IN ('fact', 'preference', 'decision', 'workflow')
           AND (${likeClause})
           AND LENGTH(content) BETWEEN 20 AND 150
-          ORDER BY importance DESC, activation_count DESC LIMIT 3
+          ORDER BY last_activated DESC, importance DESC LIMIT 3
         `).all(...params) as Array<{ content: string }>;
 
         for (const n of topicNodes) {
+          if (results.length >= 4) break;
+          if (seen.has(n.content)) continue;
           const converted = toFirstPerson(n.content, userName);
-          if (isCleanUserFact(converted)) results.push(converted);
+          if (isCleanUserFact(converted)) {
+            results.push(converted);
+            seen.add(n.content);
+          }
         }
       }
     }
 
-    // 2. Top-Knowledge auffuellen (max 5 total)
+    // 3. Top-Importance auffuellen (stabile Identitaets-Facts)
     if (results.length < 3) {
       const topFacts = db.prepare(
         `SELECT content FROM nodes
@@ -926,9 +950,11 @@ function getDirectFacts(topic: string): string[] {
 
       for (const n of topFacts) {
         if (results.length >= 5) break;
+        if (seen.has(n.content)) continue;
         const converted = toFirstPerson(n.content, userName);
-        if (isCleanUserFact(converted) && !results.includes(converted)) {
+        if (isCleanUserFact(converted)) {
           results.push(converted);
+          seen.add(n.content);
         }
       }
     }
