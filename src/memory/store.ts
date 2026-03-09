@@ -38,6 +38,11 @@ export interface NodeMetadata {
   recurring?: boolean;
   dismissed?: boolean;
   last_fired?: number;
+  // V11: Life Events
+  valid_from?: number;
+  valid_until?: number;
+  event_phase?: 'upcoming' | 'active' | 'past';
+  duration_days?: number;
 }
 
 export interface Node {

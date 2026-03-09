@@ -3,9 +3,9 @@ import { getAdaptiveQualityThreshold } from '../learning/self-tuner.js';
 
 export interface ExtractedFact {
   content: string;
-  type: 'preference' | 'fact' | 'decision' | 'task' | 'project' | 'learning' | 'identity' | 'insight' | 'example' | 'reminder';
+  type: 'preference' | 'fact' | 'decision' | 'task' | 'project' | 'learning' | 'identity' | 'insight' | 'example' | 'reminder' | 'life_event';
   confidence: number;
-  metadata?: { category?: string; quality?: number };
+  metadata?: { category?: string; quality?: number; starts?: string; duration_days?: number };
 }
 
 export type SemanticIntent = 'question' | 'statement' | 'request' | 'feedback' | 'greeting' | 'other';

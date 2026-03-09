@@ -277,3 +277,40 @@ export function getRelevantFailures(message: string, sessionId?: string, limit =
     .slice(0, limit)
     .map(s => s.node);
 }
+
+// V11-4: Aktive Life Events abfragen
+export function getActiveLifeEvents(): Node[] {
+  const db = getDb();
+  const lifeEvents = db.prepare(
+    "SELECT * FROM nodes WHERE type = 'life_event'"
+  ).all() as Node[];
+
+  return lifeEvents.filter(node => {
+    if (!node.metadata) return false;
+    try {
+      const meta = JSON.parse(node.metadata) as Record<string, unknown>;
+      return meta.event_phase === 'active';
+    } catch { return false; }
+  });
+}
+
+// V11-4: Upcoming Life Events (innerhalb N Tage)
+export function getUpcomingLifeEvents(daysAhead = 30): Node[] {
+  const db = getDb();
+  const lifeEvents = db.prepare(
+    "SELECT * FROM nodes WHERE type = 'life_event'"
+  ).all() as Node[];
+
+  const now = Date.now();
+  const horizon = now + daysAhead * 24 * 60 * 60 * 1000;
+
+  return lifeEvents.filter(node => {
+    if (!node.metadata) return false;
+    try {
+      const meta = JSON.parse(node.metadata) as Record<string, unknown>;
+      if (meta.event_phase !== 'upcoming') return false;
+      const validFrom = meta.valid_from as number;
+      return validFrom > now && validFrom <= horizon;
+    } catch { return false; }
+  });
+}

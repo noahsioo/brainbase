@@ -760,7 +760,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   } else {
     // V10-1: Kein akuter Match — upcoming Reminders einblenden
     try {
-      const upcoming = getUpcomingReminders(12);
+      const upcoming = getUpcomingReminders(48);
       if (upcoming.length > 0) {
         const upcomingBlock = upcoming
           .map(m => `- ${m.node.content} (${m.trigger})`)

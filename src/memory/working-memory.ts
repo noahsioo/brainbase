@@ -213,12 +213,36 @@ export function finalizeWorkingMemory(sessionId: string): string | null {
 
   // V9-4: Cross-Session Bridge — State fuer naechste Session speichern
   try {
+    // V10: Bridge nutzt echte Graph-Entities statt nur WM-Woerter
+    const graphEntities = db.prepare(`
+      SELECT n.content, sa.activation FROM nodes n
+      JOIN session_activations sa ON n.id = sa.node_id
+      WHERE sa.session_id = ? AND n.type = 'entity' AND sa.activation > 0.05
+      ORDER BY sa.activation DESC LIMIT 8
+    `).all(sessionId) as Array<{ content: string; activation: number }>;
+
+    const wmEntities = Object.entries(memory.active_entities)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, score]) => ({ name, score }));
+
+    // Graph-Entities priorisieren, WM-Entities als Fallback
+    const allEntities = [
+      ...graphEntities.map(e => ({ name: e.content, score: e.activation })),
+      ...wmEntities,
+    ];
+    // Deduplizieren nach Name (case-insensitive)
+    const seen = new Set<string>();
+    const topEntities = allEntities.filter(e => {
+      const key = e.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 8);
+
     const bridgeState = {
       last_topic: memory.current_topic,
-      top_entities: Object.entries(memory.active_entities)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([name, score]) => ({ name, score })),
+      top_entities: topEntities,
       open_questions: memory.open_questions.slice(0, 3),
       context_stack: memory.context_stack.slice(0, 3),
       intent: memory.last_message_intent,

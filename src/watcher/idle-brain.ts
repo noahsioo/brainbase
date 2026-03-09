@@ -1,4 +1,4 @@
-import { getDb, getNode } from '../memory/store.js';
+import { getDb, getNode, updateNode, type Node, type NodeMetadata } from '../memory/store.js';
 import { getSessionActivationValue, setSessionActivationValue } from '../memory/activation.js';
 import { measureSystemHealth } from '../senses/interoception.js';
 import { detectHungerZones } from '../memory/knowledge-hunger.js';
@@ -15,13 +15,14 @@ export interface IdleResult {
   decay_applied: number;
   pre_warmed: number;
   upcoming_reminders: number;
+  life_events_promoted: number;
 }
 
 export function runIdleTick(): IdleResult {
   const result: IdleResult = {
     health_updated: false, hunger_checked: false,
     self_model_updated: false, dmn_connections: 0, decay_applied: 0,
-    pre_warmed: 0, upcoming_reminders: 0,
+    pre_warmed: 0, upcoming_reminders: 0, life_events_promoted: 0,
   };
 
   const db = getDb();
@@ -67,7 +68,7 @@ export function runIdleTick(): IdleResult {
 
   // 6. V10-3: Prospective Memory — upcoming Reminders vorwaermen
   try {
-    const upcoming = getUpcomingReminders(6);
+    const upcoming = getUpcomingReminders(24);
     for (const match of upcoming) {
       for (const sessionId of getActiveSessionIds()) {
         const current = getSessionActivationValue(match.node.id, sessionId);
@@ -79,7 +80,50 @@ export function runIdleTick(): IdleResult {
     result.upcoming_reminders = upcoming.length;
   } catch { /* non-fatal */ }
 
+  // 7. V11-3: Life Event Temporal Promotion
+  try {
+    result.life_events_promoted = promoteLifeEvents();
+  } catch { /* non-fatal */ }
+
   return result;
+}
+
+// V11-3: Life Events phasenweise promoten (upcoming → active → past)
+function promoteLifeEvents(): number {
+  const db = getDb();
+  const lifeEvents = db.prepare(
+    "SELECT * FROM nodes WHERE type = 'life_event'"
+  ).all() as Node[];
+
+  const now = Date.now();
+  let promoted = 0;
+
+  for (const node of lifeEvents) {
+    if (!node.metadata) continue;
+    try {
+      const meta = JSON.parse(node.metadata) as NodeMetadata;
+      if (!meta.valid_from || !meta.valid_until) continue;
+
+      let newPhase: 'upcoming' | 'active' | 'past';
+      if (now < meta.valid_from) newPhase = 'upcoming';
+      else if (now <= meta.valid_until) newPhase = 'active';
+      else newPhase = 'past';
+
+      if (newPhase !== meta.event_phase) {
+        meta.event_phase = newPhase;
+        updateNode(node.id, { metadata: JSON.stringify(meta) });
+        promoted++;
+
+        if (newPhase === 'active') {
+          for (const sessionId of getActiveSessionIds()) {
+            setSessionActivationValue(node.id, sessionId, 0.2);
+          }
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  return promoted;
 }
 
 function parseFocusEntities(raw: string): string[] {

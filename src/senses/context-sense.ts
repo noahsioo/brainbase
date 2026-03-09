@@ -5,6 +5,7 @@
 import { getActivatedNodes } from '../memory/activation.js';
 import { getDb, type Node, type NodeMetadata } from '../memory/store.js';
 import { getWorkingMemory } from '../memory/working-memory.js';
+import { getActiveLifeEvents } from '../memory/prospective.js';
 
 export interface ContextSignal {
   provider: string;
@@ -15,6 +16,7 @@ export interface ContextSignal {
   currentProject: string | null;
   isNewSession: boolean;    // first few messages
   isDeepSession: boolean;   // many messages, deep in a topic
+  activeLifePhase: string | null;  // V11-5: aktive Lebensphase
 }
 
 function getTimeOfDay(): ContextSignal['timeOfDay'] {
@@ -103,6 +105,15 @@ export function analyzeContext(sessionId: string, provider: string): ContextSign
   const isNewSession = sessionLength <= 2;
   const isDeepSession = sessionLength >= 10 && sessionAge >= 10;
 
+  // V11-5: Aktive Lebensphase
+  let activeLifePhase: string | null = null;
+  try {
+    const lifeEvents = getActiveLifeEvents();
+    if (lifeEvents.length > 0) {
+      activeLifePhase = lifeEvents[0].content;
+    }
+  } catch { /* non-fatal */ }
+
   return {
     provider,
     sessionLength,
@@ -112,5 +123,6 @@ export function analyzeContext(sessionId: string, provider: string): ContextSign
     currentProject,
     isNewSession,
     isDeepSession,
+    activeLifePhase,
   };
 }

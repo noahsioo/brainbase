@@ -10,7 +10,7 @@ import { getScope } from '../memory/session-scope.js';
 import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { initWorkingMemory } from '../memory/working-memory.js';
-import { checkProspectiveTriggers, getUpcomingReminders, type ProspectiveMatch } from '../memory/prospective.js';
+import { checkProspectiveTriggers, getUpcomingReminders, getActiveLifeEvents, type ProspectiveMatch } from '../memory/prospective.js';
 import { getOpenTasks } from '../watcher/task-watcher.js';
 
 interface SessionStartInput {
@@ -74,7 +74,7 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     let upcomingReminders: ProspectiveMatch[] = [];
     try {
       dueReminders = checkProspectiveTriggers('');
-      upcomingReminders = getUpcomingReminders(24);
+      upcomingReminders = getUpcomingReminders(72);
     } catch { /* non-fatal */ }
 
     let systemMessage: string;
@@ -103,6 +103,17 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
           .join('\n');
         systemMessage += `## Bald faellig\n${upcomingBlock}\n\n`;
       }
+      // V11-4: Aktive Life Events anzeigen
+      try {
+        const lifeEvents = getActiveLifeEvents();
+        if (lifeEvents.length > 0) {
+          const leBlock = lifeEvents
+            .map(le => `- ${le.content}`)
+            .join('\n');
+          systemMessage += `## Aktuelle Lebensphase\n${leBlock}\n\n`;
+        }
+      } catch { /* non-fatal */ }
+
       systemMessage += context;
     } else {
       systemMessage = '[Memory System Active] Noch keine Memories vorhanden. Das System lernt automatisch.';
@@ -136,13 +147,15 @@ function loadSessionBridge(sessionId: string): void {
     const ageHours = (Date.now() - bridge.timestamp) / (1000 * 60 * 60);
     if (ageHours > 24) return;
 
-    // Frischer Bridge = staerkere Aktivierung
-    const energyScale = ageHours < 2 ? 0.5 : ageHours < 8 ? 0.3 : 0.15;
+    // V10: Staerkere Bridge-Activation fuer besseren Cross-Session Context
+    const energyScale = ageHours < 2 ? 0.8 : ageHours < 8 ? 0.5 : 0.25;
 
     for (const entity of bridge.top_entities) {
       const entityNode = findEntityByName(entity.name);
       if (entityNode) {
-        activateNode(entityNode.id, entity.score * energyScale, sessionId);
+        // Mindestens 0.2 Activation damit Context Generator die Nodes findet
+        const energy = Math.max(0.2, entity.score * energyScale);
+        activateNode(entityNode.id, energy, sessionId);
       }
     }
   } catch { /* non-fatal */ }
@@ -217,8 +230,13 @@ function formatUpcoming(match: ProspectiveMatch): string {
     if (diffH <= 1) timeLabel = 'In ~1 Stunde';
     else if (diffH < 24) timeLabel = `In ~${diffH} Stunden`;
     else {
-      const dayStr = date.toLocaleDateString('de-DE', { weekday: 'long' });
-      timeLabel = dayStr;
+      const diffDays = Math.round(diffH / 24);
+      if (diffDays === 1) timeLabel = 'Morgen';
+      else if (diffDays <= 3) timeLabel = `In ~${diffDays} Tagen`;
+      else {
+        const dayStr = date.toLocaleDateString('de-DE', { weekday: 'long' });
+        timeLabel = dayStr;
+      }
     }
 
     return `- ${timeLabel}: ${match.node.content}`;

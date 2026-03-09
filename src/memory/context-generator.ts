@@ -6,7 +6,7 @@ import { getMetaProfile } from '../tacit/meta-learner.js';
 import { getOpenTasks } from '../watcher/task-watcher.js';
 import { buildGhostContext } from './ghost-context.js';
 import { getChunksForContext } from './chunking.js';
-import { getRelevantFailures } from './prospective.js';
+import { getRelevantFailures, getActiveLifeEvents, getUpcomingLifeEvents } from './prospective.js';
 import { cosineSimilarity, getEmbeddingCache } from '../llm/embeddings.js';
 import { getOpenGaps } from '../learning/gap-detector.js';
 // V8-1: buildUserModel, getTopicExpertise entfernt (Budget-Modifier vereinfacht)
@@ -1535,6 +1535,42 @@ function buildProspectionSlot(budget: number, currentTopic?: string, sessionId?:
   return truncateToTokens(`## Antizipation\n- ${parts.join('\n- ')}\n`, budget);
 }
 
+// ── V11-4: Life Context — aktive Lebensphasen ────────────────
+
+function buildLifeContextSlot(budget: number): string {
+  const active = getActiveLifeEvents();
+  const upcoming = getUpcomingLifeEvents(30);
+
+  if (active.length === 0 && upcoming.length === 0) return '';
+
+  const now = Date.now();
+  const parts: string[] = [];
+
+  for (const node of active) {
+    try {
+      const meta = JSON.parse(node.metadata || '{}') as Record<string, unknown>;
+      const validUntil = meta.valid_until as number;
+      const daysLeft = Math.round((validUntil - now) / (24 * 60 * 60 * 1000));
+      parts.push(`Aktuelle Phase: ${node.content} (noch ~${daysLeft} Tage)`);
+    } catch {
+      parts.push(`Aktuelle Phase: ${node.content}`);
+    }
+  }
+
+  for (const node of upcoming) {
+    try {
+      const meta = JSON.parse(node.metadata || '{}') as Record<string, unknown>;
+      const validFrom = meta.valid_from as number;
+      const daysUntil = Math.round((validFrom - now) / (24 * 60 * 60 * 1000));
+      parts.push(`Bald: ${node.content} (in ~${daysUntil} Tagen)`);
+    } catch {
+      parts.push(`Bald: ${node.content}`);
+    }
+  }
+
+  return truncateToTokens(`## Lebenskontext\n- ${parts.join('\n- ')}\n`, budget);
+}
+
 // ── Task Reminder (unchanged) ───────────────────────────────
 
 function buildTaskReminderSlot(budget: number, sessionId?: string): string {
@@ -1767,6 +1803,14 @@ function buildMetaInsightSlot(
   if (taskMode && TASK_HINTS[taskMode]) {
     lines.push(TASK_HINTS[taskMode]);
   }
+
+  // V11-5: Life Phase hint
+  try {
+    const activeLE = getActiveLifeEvents();
+    if (activeLE.length > 0) {
+      lines.push(`User ist gerade in: ${activeLE.map(le => le.content).join(', ')}. Beruecksichtige diesen Lebenskontext.`);
+    }
+  } catch { /* non-fatal */ }
 
   // 13.1: Expertise-based hint
   if (topicExpertise !== undefined) {
@@ -2197,6 +2241,10 @@ export function generateContext(
     const scene = buildSceneSlot(100, currentTopic, effectiveCurrentMood, effectiveTaskMode, sessionId, effectiveContextSignal);
     if (scene) sections.push(scene);
   }
+
+  // V11-4: Life Context — IMMER wenn aktive/upcoming Life Events existieren
+  const lifeContext = buildLifeContextSlot(80);
+  if (lifeContext) sections.push(lifeContext);
 
   // Working Memory
   if (slots.showWorkingMemory) {

@@ -149,8 +149,18 @@ Only use facts for these SPECIFIC cases:
   The user mentions something they need to do/remember in the future.
   MUST include: WHAT needs to happen. SHOULD include: WHEN (date/time/day).
   Do NOT use for vague plans ("irgendwann will ich...") — only concrete intentions with a time reference.
+- A LIFE EVENT or life phase: a PERIOD that affects the user's context over days/weeks/months (type: life_event)
+  Unlike reminders (one-shot), life events have a DURATION.
+  "In 2 Monaten Sommerferien" → { type: "life_event", content: "Sommerferien", metadata: { starts: "in 2 Monaten", duration_days: 42 } }
+  "Ab September neuer Job" → { type: "life_event", content: "Neuer Job", metadata: { starts: "September", duration_days: 365 } }
+  "Bin gerade krank" → { type: "life_event", content: "Krank", metadata: { starts: "heute", duration_days: 7 } }
+  "Pruefungsphase laeuft" → { type: "life_event", content: "Pruefungsphase", metadata: { starts: "heute", duration_days: 21 } }
+  MUST include: WHAT the phase is. SHOULD include: WHEN it starts (in metadata.starts).
+  metadata.duration_days is your BEST ESTIMATE of how long this phase typically lasts.
+  Do NOT use for single events ("Zahnarzt am Mittwoch") — use reminder for those.
+  Use life_event ONLY for PHASES: vacation, illness, exam period, new job, moving, travel, etc.
 
-Allowed fact types: preference, decision, identity, example, reminder
+Allowed fact types: preference, decision, identity, example, reminder, life_event
 Do NOT use any other fact type. If info fits as entity+relation, use that instead.
 
 ## DEFAULT: nothing_new: true
@@ -233,7 +243,7 @@ Respond with this exact JSON:
     { "from": "EntityA", "to": "EntityB", "type": "uses|likes|dislikes|builds|knows|part_of|works_with|prefers|wants|is_a|located_at|has_skill|related_to", "confidence": 0.3-0.5 }
   ],
   "new_facts": [
-    { "content": "...", "type": "preference|decision|identity|example|reminder", "confidence": 0.3-0.5, "metadata": { "category": "optional" } }
+    { "content": "...", "type": "preference|decision|identity|example|reminder|life_event", "confidence": 0.3-0.5, "metadata": { "category": "optional", "starts": "temporal expression for life_event", "duration_days": 14 } }
   ],
   "topic": { "name": "short concrete topic", "confidence": 0.0-1.0 },
   "intent": "question|statement|request|feedback|greeting|other",
@@ -581,7 +591,7 @@ export async function extractFromMessageDetailed(
       if (!fact.content || fact.content.length < 5 || fact.content.length > maxLen) continue;
       if (isGarbage(fact.content)) { recordGarbage(); recordGarbageType(fact.content); continue; }
 
-      const validTypes = ['preference', 'decision', 'identity', 'example', 'reminder'];
+      const validTypes = ['preference', 'decision', 'identity', 'example', 'reminder', 'life_event'];
       if (!validTypes.includes(fact.type)) continue;
 
       // V6-1: Reminder → Prospective Memory (skip normal fact storage)
@@ -601,6 +611,36 @@ export async function extractFromMessageDetailed(
           trigger_type: temporal?.type === 'recurring'
             ? 'recurring'
             : temporal ? (triggerWords.length > 0 ? 'both' : 'time') : 'event',
+        });
+        recordCreation();
+        continue;
+      }
+
+      // V11-2: Life Event → Temporal Life Context (skip normal fact storage)
+      if (fact.type === 'life_event') {
+        const factMeta = fact.metadata as Record<string, unknown> | undefined;
+        const startsExpr = (factMeta?.starts as string) || fact.content;
+        const temporal = parseTemporalExpression(startsExpr);
+        const durationDays = (factMeta?.duration_days as number) || 14;
+
+        const validFrom = temporal?.date || Date.now();
+        const validUntil = validFrom + durationDays * 24 * 60 * 60 * 1000;
+
+        const now = Date.now();
+        let phase: 'upcoming' | 'active' | 'past' = 'upcoming';
+        if (now >= validFrom && now <= validUntil) phase = 'active';
+        if (now > validUntil) phase = 'past';
+
+        addNode(fact.content, 'life_event', {
+          importance: 0.9,
+          confidence: Math.min(0.5, fact.confidence),
+          source: `llm:${sessionId}`,
+          metadata: {
+            valid_from: validFrom,
+            valid_until: validUntil,
+            event_phase: phase,
+            duration_days: durationDays,
+          },
         });
         recordCreation();
         continue;
