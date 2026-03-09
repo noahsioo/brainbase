@@ -163,24 +163,30 @@ Only use facts for these SPECIFIC cases:
 Allowed fact types: preference, decision, identity, example, reminder, life_event
 Do NOT use any other fact type. If info fits as entity+relation, use that instead.
 
-## DEFAULT: nothing_new: true
-The DEFAULT response is nothing_new: true. You need a STRONG reason to set it to false.
+## WHEN TO SET nothing_new
+nothing_new: true means "there is ZERO new concrete information in this message".
+- Smalltalk, confirmations, code requests, build commands, greetings → nothing_new: true
+- Meta-comments about the conversation → nothing_new: true
+- Code debugging, fixing, building, deploying → nothing_new: true (unless a NEW tool/technology is mentioned)
+
+CRITICAL: If a message mentions ANY new named entity (person, place, company, tool) that is NOT in the known entities list, set nothing_new: false and extract it.
+Example: "Ich studiere an der TU Muenchen und arbeite bei Siemens"
+- If TU Muenchen is already known but Siemens is NOT → nothing_new: false, extract Siemens
+- Only set nothing_new: true if EVERYTHING in the message is already known
 
 ## ABSOLUTE RULES
-1. nothing_new: true is the DEFAULT. When in doubt → nothing_new: true
-2. Smalltalk, confirmations, code requests, build commands, greetings → nothing_new: true
-3. Continuing a conversation without NEW concrete info → nothing_new: true
-4. NEVER store vague observations: "User is exploring...", "User wants to build...", "User believes..."
-5. Only store CONCRETE, NAMED things: a person, a technology, a decision, a preference
-6. confidence between 0.3 and 0.5
-7. Prefer entities+relations over facts. Facts ONLY for preferences/decisions/identity
-8. "User" or the user's name is always a valid entity (type: person)
-9. Max 5 entities per message. If more → keep only the most important
-10. You can UPDATE existing knowledge via the "updates" array
-11. Meta-comments about the conversation → nothing_new: true
-12. Repeating or rephrasing something already known → nothing_new: true
-13. Code debugging, fixing, building, deploying → nothing_new: true (unless a NEW tool/technology is mentioned)
-14. It's MUCH better to miss something than to store garbage.`;
+1. If ANY new concrete entity or fact exists → nothing_new: false
+2. NEVER store vague observations: "User is exploring...", "User wants to build...", "User believes..."
+3. Only store CONCRETE, NAMED things: a person, a technology, a decision, a preference
+4. confidence between 0.3 and 0.5
+5. Prefer entities+relations over facts. Facts ONLY for preferences/decisions/identity
+6. "User" or the user's name is always a valid entity (type: person)
+7. Max 5 entities per message. If more → keep only the most important
+8. You can UPDATE existing knowledge via the "updates" array
+9. Repeating ONLY already known info → nothing_new: true
+10. Extract PEOPLE by name (family, friends, colleagues). "Mein Bruder Max" → entity Max (person) + relation
+11. Extract ORGANIZATIONS (companies, universities, teams) the user is connected to
+12. It's better to extract a real entity than to miss it. But NEVER store garbage.`;
 
   if (frustration) {
     return base + `
@@ -207,7 +213,7 @@ function buildExtractionPrompt(
       knowledgeProfile !== 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.';
 
     if (hasKnowledge) {
-      nodesContext = `\nWhat you already know about this person:\n${knowledgeProfile}\n\nOnly store things that are NEW and CONCRETE. Do NOT repeat what you already know.\n`;
+      nodesContext = `\nWhat you already know about this person:\n${knowledgeProfile}\n\nIMPORTANT: The above is what you ALREADY know. Do NOT re-extract or create facts about things above. Focus ONLY on what is NEW in the user's message below.\n`;
     }
   } catch { /* fallback to entity names only */ }
 
@@ -225,9 +231,9 @@ function buildExtractionPrompt(
 
   let conversationBlock: string;
   if (recentContext) {
-    conversationBlock = `Recent conversation for context:\n${recentContext}\n\nExtract from the LATEST message(s). Use earlier messages only for context.`;
+    conversationBlock = `Recent conversation for context:\n${recentContext}\n\nExtract NEW entities, relations, and facts from the messages above. Focus on NAMED things (people, companies, places, tools) that are NOT in the "already known" section.`;
   } else {
-    conversationBlock = `New message: "${message}"`;
+    conversationBlock = `New message: "${message}"\n\nExtract NEW entities, relations, and facts from this message. Focus on NAMED things (people, companies, places, tools) that are NOT in the "already known" section.`;
   }
 
   return `${nodesContext}
@@ -263,6 +269,7 @@ RULES FOR topic / intent / references:
 If nothing_new is true, entities/relations/new_facts/updates MUST be empty.
 topic and intent may still be set if clear. references may still be set if useful.
 Prefer entities+relations over facts. Facts ONLY for preferences, decisions, identity, or examples.
+FOCUS: Extract from the USER'S MESSAGE, not from the existing knowledge. Do NOT create facts about things you already know.
 Remember: nothing_new: true is the DEFAULT. Most messages don't contain new knowledge.`;
 }
 
@@ -374,6 +381,12 @@ export async function extractFromMessageDetailed(
   if (!response || typeof response.nothing_new !== 'boolean') {
     console.error('[Extractor] Invalid response format');
     return { nodes: [], semantic: null };
+  }
+
+  // Diagnostic: log when LLM says nothing_new but message had substance
+  if (response.nothing_new && process.env.MEMORY_DEBUG) {
+    const msgPreview = message.slice(0, 120);
+    console.error(`[Extractor] LLM returned nothing_new:true for: "${msgPreview}"`);
   }
 
   const semantic = buildWatcherSemanticPayload(response);

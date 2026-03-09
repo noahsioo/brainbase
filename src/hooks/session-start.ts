@@ -272,6 +272,9 @@ const SESSION_GARBAGE_WORDS = new Set([
   'sachen', 'dingen', 'sache', 'ding', 'dritte', 'erste',
   'checken', 'testen', 'schauen', 'gucken', 'zeigen',
   'woran', 'arbeiten', 'mache', 'mach', 'klar', 'schon',
+  'habe', 'hatte', 'zuletzt', 'gemacht', 'gesagt', 'gemeint',
+  'vorher', 'vorhin', 'davor', 'danach', 'dabei',
+  'baue', 'neue', 'neues', 'neuen', 'neuer',
 ]);
 
 function isGarbageWord(word: string): boolean {

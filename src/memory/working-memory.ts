@@ -226,24 +226,31 @@ export function finalizeWorkingMemory(sessionId: string): string | null {
       .slice(0, 5)
       .map(([name, score]) => ({ name, score }));
 
+    // V12: Sanitize entity names — strip "(+ ...)" suffixes from context-generator enrichments
+    const sanitizeEntityName = (name: string): string => {
+      const cleaned = name.replace(/\s*\([\+\-].*?\)\s*/g, '').trim();
+      return cleaned || name;
+    };
+
     // V12: Graph-Entities priorisieren, WM-Entities nur als Fallback, Garbage filtern
     const allEntities = [
-      ...graphEntities.map(e => ({ name: e.content, score: e.activation })),
-      ...wmEntities.filter(e => isRealEntity(e.name)),
+      ...graphEntities.map(e => ({ name: sanitizeEntityName(e.content), score: e.activation })),
+      ...wmEntities.filter(e => isRealEntity(e.name)).map(e => ({ name: sanitizeEntityName(e.name), score: e.score })),
     ];
     const seen = new Set<string>();
     const topEntities = allEntities.filter(e => {
       const key = e.name.toLowerCase();
       if (seen.has(key)) return false;
+      if (!isRealEntity(e.name)) return false;
       seen.add(key);
       return true;
     }).slice(0, 8);
 
     // V12: Bridge topic/stack aus Graph-Entities statt WM-Wort-Fragmenten
     const graphEntityNames = graphEntities
-      .filter(e => e.content.length > 2)
-      .slice(0, 3)
-      .map(e => e.content);
+      .map(e => sanitizeEntityName(e.content))
+      .filter(name => name.length > 2 && isRealEntity(name))
+      .slice(0, 3);
     const bridgeTopic = graphEntityNames.length > 0
       ? graphEntityNames.join(', ')
       : memory.current_topic;
@@ -419,12 +426,22 @@ const GARBAGE_ENTITY_WORDS = new Set([
   'haben', 'sind', 'werden', 'muss', 'kann', 'soll',
   'noch', 'aber', 'oder', 'und', 'nicht', 'kein',
   'woran', 'arbeite', 'arbeiten', 'mache', 'mach',
+  'wir', 'ihr', 'sie', 'uns', 'euch', 'mir', 'dir',
+  'baue', 'neue', 'neues', 'neuen', 'neuer',
+  'habe', 'hatte', 'hatten', 'letztes', 'letzte', 'letzten',
+  'zuletzt', 'gemacht', 'gesagt', 'gemeint', 'gefragt',
+  'vorher', 'vorhin', 'davor', 'danach', 'dabei',
 ]);
 
 export function isRealEntity(name: string): boolean {
-  const lower = name.toLowerCase().trim();
+  // Strip trailing punctuation before checking
+  const lower = name.toLowerCase().trim().replace(/[.,;:!?]+$/, '');
   if (lower.length < 3) return false;
   if (GARBAGE_ENTITY_WORDS.has(lower)) return false;
+  // Check each word in multi-word names — if ALL words are garbage, reject
+  const words = lower.split(/\s+/).filter(w => w.length > 1);
+  if (words.length > 0 && words.every(w => GARBAGE_ENTITY_WORDS.has(w) || w.length <= 3)) return false;
+  // Short single lowercase words are not entities
   if (lower.length <= 4 && /^[a-zäöüß]+$/.test(lower)) return false;
   return true;
 }
