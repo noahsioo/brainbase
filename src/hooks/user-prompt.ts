@@ -684,7 +684,9 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       wmForMode.current_topic &&
       wmForMode.message_count >= 3 &&
       Object.keys(wmForMode.active_entities).length >= 2;
-    contextMode = wmHasStrongTopic ? 'STANDARD' : 'LIGHT';
+    // V10: Erste 2 Nachrichten einer Session → STANDARD (Cross-Session Context braucht Platz)
+    const isSessionStart = !wmForMode || wmForMode.message_count <= 2;
+    contextMode = (wmHasStrongTopic || isSessionStart) ? 'STANDARD' : 'LIGHT';
   } else {
     contextMode = 'STANDARD';
   }

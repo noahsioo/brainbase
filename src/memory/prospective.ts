@@ -17,6 +17,24 @@ export function createProspectiveMemory(
     trigger_type?: 'time' | 'event' | 'both' | 'recurring';
   },
 ): Node {
+  const db = getDb();
+
+  // V10: Duplikat-Prevention — kein identischer Reminder innerhalb 1h
+  const contentWords = content.toLowerCase().split(/\s+/).filter(w => w.length > 3).slice(0, 3);
+  if (contentWords.length > 0) {
+    const searchPattern = `%${contentWords.join('%')}%`;
+    const existing = db.prepare(
+      "SELECT id, importance FROM nodes WHERE type = 'prospective' AND LOWER(content) LIKE ? AND created_at > ?"
+    ).get(searchPattern, Date.now() - 60 * 60 * 1000) as { id: string; importance: number } | undefined;
+    if (existing) {
+      // Bestehenden Node boosten statt Duplikat erstellen
+      if (opts?.importance && opts.importance > existing.importance) {
+        updateNode(existing.id, { importance: opts.importance });
+      }
+      return db.prepare("SELECT * FROM nodes WHERE id = ?").get(existing.id) as Node;
+    }
+  }
+
   const trigger = triggerWords.map(w => w.toLowerCase()).join(',');
 
   const metadata: NodeMetadata = {};

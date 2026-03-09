@@ -37,6 +37,7 @@ export interface NodeMetadata {
   trigger_type?: 'time' | 'event' | 'both' | 'recurring';
   recurring?: boolean;
   dismissed?: boolean;
+  last_fired?: number;
 }
 
 export interface Node {
