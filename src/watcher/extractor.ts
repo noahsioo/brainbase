@@ -277,7 +277,12 @@ function isSubstantiveMessage(message: string): boolean {
 
   // V5-2: Code/build commands are not substantive for memory extraction
   const commandPatterns = /^(mach|fix|aender|änder|build|run|deploy|push|commit|install|update|start|stop|delete|remove|erstell|zeig|show|list|check|test)\b/i;
-  if (words.length <= 5 && commandPatterns.test(lastMessage.trim())) return false;
+  if (words.length <= 5 && commandPatterns.test(lastMessage.trim())) {
+    // V8-6: Wenn ein Eigenname/Tech-Term enthalten ist → trotzdem substantive
+    const TECH_PATTERN = /[A-Z][a-z]+[A-Z]|[A-Z]{2,}|[a-z]+\.[a-z]+|typescript|python|react|node|api|sdk|cli|llm|gpu|cpu|sql|css|html|json|yaml|xml/i;
+    const hasEntity = words.some(w => TECH_PATTERN.test(w) && w.length > 2);
+    if (!hasEntity) return false;
+  }
 
   // V5-2: Filter very short messages with only stopwords/filler
   const SUBSTANTIVE_STOPWORDS = new Set([

@@ -14,11 +14,11 @@ export interface ProviderProfile {
 }
 
 const DEFAULT_PROFILES: Record<string, Partial<ProviderProfile>> = {
-  'claude-code': { context_style: 'narrative', budget_multiplier: 1.0, max_chunks: 7 },
+  'claude-code': { context_style: 'structured', budget_multiplier: 1.0, max_chunks: 7 },
   'cursor':      { context_style: 'minimal',   budget_multiplier: 0.5, max_chunks: 4 },
   'windsurf':    { context_style: 'minimal',   budget_multiplier: 0.6, max_chunks: 5 },
   'aider':       { context_style: 'minimal',   budget_multiplier: 0.5, max_chunks: 4 },
-  'claude-desktop': { context_style: 'narrative', budget_multiplier: 1.3, max_chunks: 9 },
+  'claude-desktop': { context_style: 'structured', budget_multiplier: 1.3, max_chunks: 9 },
   'continue-dev':   { context_style: 'structured', budget_multiplier: 0.7, max_chunks: 5 },
   'codex':       { context_style: 'minimal',   budget_multiplier: 0.5, max_chunks: 4 },
   'gemini':      { context_style: 'structured', budget_multiplier: 0.8, max_chunks: 6 },

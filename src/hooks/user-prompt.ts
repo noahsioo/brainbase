@@ -557,6 +557,30 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     applyAttentionSpotlight(sessionId, 10);
 
     clearDisinhibitionTargets(sessionId);
+  } else if (shouldPersistState) {
+    // V8-6: WM-aware activation for low-signal messages
+    const wmForLowSignal = getWorkingMemory(sessionId);
+    const hasStrongWM = wmForLowSignal &&
+      wmForLowSignal.current_topic &&
+      wmForLowSignal.message_count >= 3 &&
+      Object.keys(wmForLowSignal.active_entities).length >= 2;
+
+    if (hasStrongWM) {
+      startNewCoherenceRound(sessionId);
+      primeActivations(0.15, sessionId);
+
+      const wmEntities = Object.entries(wmForLowSignal.active_entities)
+        .filter(([, score]) => score >= 0.2)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([entity]) => entity);
+
+      if (wmEntities.length > 0) {
+        activateByEntities(wmEntities, sessionId);
+      } else if (wmForLowSignal.current_topic) {
+        activateByEntities([wmForLowSignal.current_topic], sessionId);
+      }
+    }
   }
 
   // Diagnostic: activated nodes after semantic activation
@@ -638,7 +662,13 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   // M29: Dual Process — signal strength determines context depth, not message count
   let contextMode: DetailMode;
   if (signal.combined < GATE_HEBBIAN) {
-    contextMode = 'LIGHT';
+    // V8-6: WM-aware context mode — wenn WM starkes Topic hat, nicht auf LIGHT degradieren
+    const wmForMode = getWorkingMemory(sessionId);
+    const wmHasStrongTopic = wmForMode &&
+      wmForMode.current_topic &&
+      wmForMode.message_count >= 3 &&
+      Object.keys(wmForMode.active_entities).length >= 2;
+    contextMode = wmHasStrongTopic ? 'STANDARD' : 'LIGHT';
   } else {
     contextMode = 'STANDARD';
   }

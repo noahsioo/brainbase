@@ -2277,8 +2277,8 @@ function integrateContext(
 
   const chunks: string[] = [];
 
-  // V3 7.7: Scene Construction — kohaerentes Szenen-Briefing fuer narrative Provider
-  if (style === 'narrative') {
+  // V3 7.7: Scene Construction — kohaerentes Szenen-Briefing
+  if (style === 'narrative' || style === 'structured') {
     const scene = buildSceneBriefing(sessionId, currentMood, taskMode);
     if (scene) chunks.push(scene);
   }
@@ -2287,6 +2287,9 @@ function integrateContext(
     if (style === 'minimal') {
       const cleaned = sectionToMinimal(section);
       if (cleaned) chunks.push(cleaned);
+    } else if (style === 'structured') {
+      const structured = sectionToStructured(section);
+      if (structured) chunks.push(structured);
     } else {
       const narrative = sectionToNarrative(section);
       if (narrative) chunks.push(narrative);
@@ -2328,6 +2331,69 @@ function sectionToMinimal(section: string): string | null {
 
   if (bullets.length === 0) return null;
   return `[${header}] ${bullets.join(' | ')}`;
+}
+
+// V8-7: Structured format — compact Key: Value with pipe separators
+function sectionToStructured(section: string): string | null {
+  const lines = section.split('\n').filter(l => l.trim());
+  if (lines.length === 0) return null;
+
+  const header = lines[0].replace(/^#+\s*/, '').trim();
+  const rest = lines.slice(1);
+
+  const bullets = rest
+    .filter(l => l.trimStart().startsWith('- '))
+    .map(l => l.replace(/^\s*-\s*/, '').trim());
+
+  const hasSubHeaders = rest.some(l => l.trimStart().startsWith('### '));
+  if (hasSubHeaders) {
+    return rest.join('\n').trim() || null;
+  }
+
+  if (bullets.length === 0) {
+    const raw = rest.map(l => l.trim()).join(' | ');
+    return raw || null;
+  }
+
+  if (header.startsWith('Ueber ') || header.startsWith('User Profile')) {
+    const name = header.replace('Ueber ', '').replace('User Profile', '').trim() || 'User';
+    const compact = bullets.map(b => {
+      const colonIdx = b.indexOf(':');
+      if (colonIdx > 0) return b.substring(colonIdx + 1).trim();
+      return b;
+    });
+    return `${name}: ${compact.join(' | ')}`;
+  }
+
+  if (header === 'Aktiver Kontext') {
+    const compact = bullets.map(b => {
+      return b.replace(/^\*\*(.+?)\*\*/, '$1').replace(/\s+/g, ' ').trim();
+    });
+    return `Kontext: ${compact.join(' | ')}`;
+  }
+
+  if (header.startsWith('Zum Thema:')) {
+    const topic = header.replace('Zum Thema:', '').trim();
+    return `${topic}: ${bullets.join(' | ')}`;
+  }
+
+  if (header === 'Offene Aufgaben') {
+    return `Tasks: ${bullets.join(' | ')}`;
+  }
+
+  if (header === 'Vorsicht') {
+    return `Vorsicht: ${bullets.join(' | ')}`;
+  }
+
+  if (header.startsWith('Hinweis: Widersprueche')) {
+    return `Widerspruch: ${bullets.join(' | ')}`;
+  }
+
+  if (header === 'Erinnerung') {
+    return `Erinnerung: ${bullets.join(' | ')}`;
+  }
+
+  return `${header}: ${bullets.join(' | ')}`;
 }
 
 function sectionToNarrative(section: string): string | null {
