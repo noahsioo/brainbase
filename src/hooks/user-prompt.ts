@@ -1,4 +1,4 @@
-import { addToRawBuffer, createSession, getDb, getSession, setQueryEmbedding, updateNode } from '../memory/store.js';
+import { addToRawBuffer, createSession, getDb, getSession, setQueryEmbedding, updateNode, searchNodes } from '../memory/store.js';
 import { activateByEntities, applyAttentionSpotlight, primeActivations, applySTDP, getCurrentlyActivatedEntityIds, getLastSTDPEntities, setLastSTDPEntities, setCurrentEncodingContext, setSystemMode, setCurrentTaskMode, applyDisinhibition, clearDisinhibitionTargets, startNewCoherenceRound, getSessionActivationValue, setSessionActivationValue, getActivatedNodes } from '../memory/activation.js';
 import { generateContext, setSessionTopicEmbedding, setSessionMessageEmbedding, type DetailMode } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
@@ -545,6 +545,17 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
           if (activation > 0) {
             setSessionActivationValue(match.id, sessionId, activation * factor);
           }
+        }
+      }
+    }
+
+    // V9-5: Topic-Switch Activation Boost — bei Topic-Wechsel extra Nodes voraktivieren
+    if (topicChanged && effectiveTopic) {
+      const topicHits = searchNodes(effectiveTopic, 10);
+      for (const hit of topicHits) {
+        const currentAct = getSessionActivationValue(hit.id, sessionId);
+        if (currentAct < 0.1) {
+          setSessionActivationValue(hit.id, sessionId, 0.15);
         }
       }
     }

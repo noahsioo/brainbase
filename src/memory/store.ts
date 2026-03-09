@@ -1045,6 +1045,19 @@ export function findEntityByName(name: string): Node | null {
     }
   }
 
+  // V9-2: Prefix/Contains Match — nur wenn Query >= 4 Zeichen
+  if (normalized.length >= 4) {
+    const prefixMatch = db.prepare(
+      "SELECT * FROM nodes WHERE type = 'entity' AND LOWER(content) LIKE ? ORDER BY activation_count DESC LIMIT 1"
+    ).get(`${normalized}%`) as Node | undefined;
+    if (prefixMatch) return prefixMatch;
+
+    const containsMatch = db.prepare(
+      "SELECT * FROM nodes WHERE type = 'entity' AND LOWER(content) LIKE ? AND LENGTH(content) <= ? ORDER BY activation_count DESC LIMIT 1"
+    ).get(`%${normalized}%`, normalized.length * 3) as Node | undefined;
+    if (containsMatch) return containsMatch;
+  }
+
   return null;
 }
 

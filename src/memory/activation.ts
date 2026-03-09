@@ -1387,17 +1387,42 @@ export function activateByEntities(
   const allActivated: Map<string, Node> = new Map();
   const allEdges: Edge[] = [];
   let totalInhibited = 0;
+  const activatedSeedIds = new Set<string>();
 
-  for (const entityName of entities.slice(0, 7)) {
-    const entityNode = findEntityByName(entityName);
+  // Pass 1: Exakte Entity-Namen (mit V9-7 Position-Weighted Activation)
+  for (let i = 0; i < Math.min(entities.length, 7); i++) {
+    const entityNode = findEntityByName(entities[i]);
     if (!entityNode) continue;
+    activatedSeedIds.add(entityNode.id);
 
-    const result = activateNode(entityNode.id, 1.0, sessionId);
+    // V9-7: Position-Weighted Activation — erste Entity bekommt volle Energie
+    const positionalEnergy = Math.max(0.4, 1.0 - i * 0.15);
+    const result = activateNode(entityNode.id, positionalEnergy, sessionId);
     for (const n of result.activated) allActivated.set(n.id, n);
     for (const e of result.edges) {
       if (!allEdges.find(ex => ex.id === e.id)) allEdges.push(e);
     }
     totalInhibited += result.inhibited;
+  }
+
+  // V9-1: Pass 2 — Semantic Seeds (Keyword/Embedding-basiert)
+  // Wenn weniger als 3 Entities per Name gefunden → searchNodes als Fallback
+  if (activatedSeedIds.size < 3 && entities.length > 0) {
+    const query = entities.join(' ');
+    const semanticHits = searchNodes(query, 5);
+    for (const hit of semanticHits) {
+      if (activatedSeedIds.has(hit.id)) continue;
+      if (hit.type === 'auto_topic' || hit.type === 'disambiguator') continue;
+      activatedSeedIds.add(hit.id);
+      // Reduzierte Energie (0.6) — Semantic Seeds sind weniger praezise
+      const result = activateNode(hit.id, 0.6, sessionId);
+      for (const n of result.activated) allActivated.set(n.id, n);
+      for (const e of result.edges) {
+        if (!allEdges.find(ex => ex.id === e.id)) allEdges.push(e);
+      }
+      totalInhibited += result.inhibited;
+      if (activatedSeedIds.size >= 5) break;
+    }
   }
 
   if (allActivated.size >= 2) {
