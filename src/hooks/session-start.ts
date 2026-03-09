@@ -12,6 +12,8 @@ import { createEmbeddingClient } from '../llm/embeddings.js';
 import { initWorkingMemory } from '../memory/working-memory.js';
 import { checkProspectiveTriggers, getUpcomingReminders, getActiveLifeEvents, scoreReminderRelevance, scoreLifeEventRelevance, formatProactiveReminder, type ProspectiveMatch } from '../memory/prospective.js';
 import { getOpenTasks } from '../watcher/task-watcher.js';
+import { refreshClaudeMdContext } from '../memory/hot.js';
+import { toFirstPerson, isCleanUserFact } from '../utils/first-person.js';
 
 interface SessionStartInput {
   session_id?: string;
@@ -85,19 +87,18 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     if (hasMemories) {
       const parts: string[] = [];
 
-      // IMPORTANT header — triggers CLAUDE.md authority primer
-      parts.push('IMPORTANT — Verified knowledge about this user from previous conversations:\n');
+      parts.push('Before we start — here\'s what you already know about me from previous sessions:\n');
 
-      // Identity line — kurz, direktiv
+      // Identity line
       if (identityFacts.length > 0) {
-        parts.push(`You are working with ${userName} (${identityFacts.join(', ')}).`);
+        parts.push(`My name is ${userName} (${identityFacts.join(', ')}).`);
       } else {
-        parts.push(`You are working with ${userName}.`);
+        parts.push(`My name is ${userName}.`);
       }
 
       // Top Knowledge — max 5 wichtigste Facts/Preferences/Workflows
       if (topKnowledge.length > 0) {
-        parts.push('You KNOW:');
+        parts.push('Things you should know about me:');
         for (const fact of topKnowledge) {
           parts.push(`- ${fact}`);
         }
@@ -105,12 +106,12 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
 
       // Letzte Session
       if (lastSummary) {
-        parts.push(`\nLAST SESSION:\n${lastSummary}`);
+        parts.push(`\nLast time we talked about:\n${lastSummary}`);
       }
 
       // Prediction
       if (prediction) {
-        parts.push(`\nProbable topic: ${prediction.expected_topic} (${Math.round(prediction.confidence * 100)}%)`);
+        parts.push(`\nI'm probably going to ask about ${prediction.expected_topic}.`);
       }
 
       // Due Reminders — proaktiv
@@ -118,7 +119,7 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
         const reminderBlock = dueReminders
           .map(m => `- ${formatProactiveReminder(m.node)}`)
           .join('\n');
-        parts.push(`\nACTION REQUIRED:\n${reminderBlock}`);
+        parts.push(`\nDon't forget:\n${reminderBlock}`);
       }
 
       // Upcoming Reminders — scored
@@ -157,15 +158,18 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
       } catch { /* non-fatal */ }
 
       // Direktive Footer
-      parts.push('\nIMPORTANT: The above is VERIFIED. Use it proactively. NEVER re-ask for information already stated above.');
+      parts.push('\nPlease don\'t ask me about any of the above again — you already know it.');
 
       systemMessage = parts.join('\n');
     } else {
-      systemMessage = 'BrainBase active. No memories yet — system learns automatically from conversations.';
+      systemMessage = 'This is our first conversation. Get to know me — I\'ll remember everything for next time.';
     }
 
     const output = JSON.stringify({ systemMessage });
     process.stdout.write(output);
+
+    // V17: Update CLAUDE.md with dynamic context (invisible, Position 2 priority)
+    try { refreshClaudeMdContext(); } catch { /* non-fatal */ }
   } catch (err) {
     const fallback = JSON.stringify({
       systemMessage: 'BrainBase active.',
@@ -216,23 +220,15 @@ function getTopKnowledge(): string[] {
       "SELECT content FROM nodes WHERE type IN ('fact', 'preference', 'workflow', 'process', 'decision') AND LENGTH(content) BETWEEN 20 AND 200 ORDER BY importance DESC, activation_count DESC LIMIT 10"
     ).all() as Array<{ content: string }>;
 
+    const userName = getUserName();
     return nodes
-      .filter(n => isCleanFact(n.content))
+      .map(n => toFirstPerson(n.content, userName))
+      .filter(isCleanUserFact)
       .slice(0, 5)
-      .map(n => n.content.length > 120 ? n.content.substring(0, 117) + '...' : n.content);
+      .map(c => c.length > 120 ? c.substring(0, 117) + '...' : c);
   } catch { return []; }
 }
 
-function isCleanFact(content: string): boolean {
-  if (content.includes('\u2192') || content.includes('|')) return false;
-  if (content.includes('erkennt') && content.includes('als Entity')) return false;
-  if (content.startsWith('->') || content.startsWith('//')) return false;
-  const words = content.split(/\s+/).filter(w => w.length > 2);
-  if (words.length < 4) return false;
-  // Fragments die mit deutschem Kleinbuchstabe starten (abgebrochene Saetze)
-  if (/^[a-zäöü]/.test(content) && !content.includes(':')) return false;
-  return true;
-}
 
 function loadSessionBridge(sessionId: string): void {
   try {

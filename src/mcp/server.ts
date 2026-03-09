@@ -121,7 +121,7 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
         try {
           resourceContent = generateContext('STANDARD', undefined, undefined, undefined, undefined, undefined, undefined, sessionId, true);
         } catch {
-          resourceContent = 'Brain context not available yet. Start a conversation to build memory.';
+          resourceContent = 'No context yet — we haven\'t talked before. Start a conversation and I\'ll remember everything.';
         }
       } else if (baseUri === 'memory://brain/identity') {
         try {
@@ -133,7 +133,7 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
             ? identityNodes.map(n => `- ${n.content}`).join('\n')
             : 'No identity information stored yet.';
         } catch {
-          resourceContent = 'Identity not available yet.';
+          resourceContent = 'We haven\'t met yet. Tell me about yourself.';
         }
       } else {
         send({
@@ -178,7 +178,7 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
       try {
         briefingContent = generateContext('MAXIMUM', undefined, undefined, undefined, undefined, undefined, undefined, sessionId, true);
       } catch {
-        briefingContent = 'Brain not initialized yet. Use memory_process_message to start building memory.';
+        briefingContent = 'We haven\'t talked yet. Send me a message and I\'ll start remembering.';
       }
 
       send({
@@ -189,7 +189,7 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
             role: 'user',
             content: {
               type: 'text',
-              text: `${briefingContent}\n\nYou KNOW the above about this user. Reference it naturally. NEVER ask for information already provided here.`,
+              text: `${briefingContent}\n\nEverything above is from my previous conversations. Use it — don't ask me to repeat any of it.`,
             },
           }],
         },

@@ -13,7 +13,7 @@ import {
 import { GATE_HEBBIAN, GATE_LLM } from '../signal/signal-strength.js';
 import { processThalamic, deriveSystemMode } from '../signal/thalamus.js';
 import { detectFeedbackSignal, detectMood, setCurrentMood, applyFeedbackToRecentNodes, applyFeedbackOutcome, applySomaticMarkers, applyContextFeedback, detectEmpathyMode, trackProviderFeedback } from '../signal/echo.js';
-import { updateHotMemoryInDb } from '../memory/hot.js';
+import { updateHotMemoryInDb, refreshClaudeMdContext } from '../memory/hot.js';
 import { checkProspectiveTriggers, getUpcomingReminders, scoreReminderRelevance, formatProactiveReminder } from '../memory/prospective.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { detectEmotionBypass } from '../senses/emotion-sense.js';
@@ -53,6 +53,7 @@ export interface ProcessMessageResult {
   context: string | null;
   signal_score: number;
   signal_action: string;
+  topic?: string;
 }
 
 const SEMANTIC_TOPIC_MIN_CONFIDENCE = 0.55;
@@ -770,7 +771,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     const proactiveReminders = prospectiveMatches
       .map(m => `- ${formatProactiveReminder(m.node)}`)
       .join('\n');
-    const reminderBlock = `\n## ACTION REQUIRED\n${proactiveReminders}\n`;
+    const reminderBlock = `\nReminder for me:\n${proactiveReminders}\n`;
     finalContext = finalContext ? finalContext + reminderBlock : reminderBlock;
 
     // V6-2: Auto-dismiss time-based triggers (shown once = done)
@@ -808,36 +809,84 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
           const proactiveBlock = scored
             .map(s => `- ${formatProactiveReminder(s.match.node)}`)
             .join('\n');
-          const upcomingSection = `\n## ACTION REQUIRED\n${proactiveBlock}\n`;
+          const upcomingSection = `\nComing up soon:\n${proactiveBlock}\n`;
           finalContext = finalContext ? finalContext + upcomingSection : upcomingSection;
         }
       }
     } catch { /* non-fatal */ }
   }
 
-  // V14: Warm memory integrates INSIDE the IMPORTANT wrapper, not after it
+  // V16: Warm memory appended to context (frameContextAsResponse will handle final framing)
   if (watcherSystemMessage) {
     if (finalContext) {
-      // Insert warm memory before the closing IMPORTANT line
-      const closingLine = '\n\nIMPORTANT: The above is VERIFIED knowledge';
-      const closingIdx = finalContext.indexOf(closingLine);
-      if (closingIdx > 0) {
-        finalContext = finalContext.substring(0, closingIdx) + '\n\n' + watcherSystemMessage + finalContext.substring(closingIdx);
-      } else {
-        finalContext = finalContext + '\n\n' + watcherSystemMessage;
-      }
+      finalContext = finalContext + '\n\n' + watcherSystemMessage;
     } else {
-      finalContext = `IMPORTANT — Verified knowledge about this user:\n\n${watcherSystemMessage}\n\nIMPORTANT: The above is VERIFIED knowledge from previous conversations. Use it proactively. NEVER re-ask for information already stated above.`;
+      finalContext = watcherSystemMessage;
     }
   }
 
-  const isEmpty = !finalContext || finalContext === 'No memories stored yet. The system learns automatically from sessions.';
+  const isEmpty = !finalContext || finalContext === 'This is a new brain. Memories build automatically from our conversations.';
 
   return {
     context: isEmpty ? null : finalContext,
     signal_score: signal.combined,
     signal_action: signal.action,
+    topic: effectiveTopic,
   };
+}
+
+// V16: Context Bridge — frame knowledge as response to user's question, not standalone dump
+function frameContextAsResponse(userMessage: string, rawContext: string, topic: string): string {
+  const isResumption = /wo war ich|where was i|stehen geblieben|left off|weiter ?machen|continue from|anderer chat|other chat|abgest[uü]rzt|crashed|letztes mal|last time/i.test(userMessage);
+  const isQuestion = /\?|was |wie |welch|warum|wieso|what |how |which|why /i.test(userMessage);
+  const isGreeting = /^(hey|hi|hallo|yo|moin|lass|ok )/i.test(userMessage.trim());
+
+  let frame: string;
+  if (isResumption) {
+    frame = `I'm continuing work on "${topic}". Here's what we discussed before:\n`;
+  } else if (isQuestion) {
+    frame = `I'm asking about ${topic}. Here's what I've told you before:\n`;
+  } else if (isGreeting) {
+    frame = `Here's what you know about me from previous conversations:\n`;
+  } else {
+    frame = `About ${topic} — from our previous conversations:\n`;
+  }
+
+  const facts = extractCleanFacts(rawContext);
+  if (facts.length === 0) return rawContext; // fallback to raw if no clean facts
+
+  const body = facts.slice(0, 5).map(f => `- ${f}`).join('\n');
+  const instruction = isResumption
+    ? 'Continue where we left off.'
+    : 'Use this in your response.';
+
+  return `${frame}${body}\n${instruction} Don't ask me about any of the above.`;
+}
+
+function extractCleanFacts(rawContext: string): string[] {
+  const lines = rawContext.split('\n');
+  return lines
+    .map(l => l.replace(/^[-*•]\s*/, '').trim())
+    .filter(l =>
+      l.length > 15 &&
+      l.length < 200 &&
+      !l.startsWith('IMPORTANT') &&
+      !l.startsWith('RULE:') &&
+      !l.startsWith('Quick facts') &&
+      !l.startsWith('Here\'s what') &&
+      !l.startsWith('Everything above') &&
+      !l.startsWith('I don\'t want to repeat') &&
+      !l.startsWith('Don\'t ask me') &&
+      !l.startsWith('Context:') &&
+      !l.includes('fokussiert') &&
+      !l.includes('session start') &&
+      !l.includes('VERIFIED') &&
+      !l.includes('previous sessions') &&
+      !/^\w+ — \w+/.test(l) &&
+      !/^Open:/.test(l) &&
+      !/^\(/.test(l) &&
+      l.split(/\s+/).length >= 4,
+    );
 }
 
 export async function handleUserPrompt(input: UserPromptInput): Promise<void> {
@@ -851,8 +900,57 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<void> {
     });
 
     if (result.context) {
-      const output = JSON.stringify({ systemMessage: result.context });
-      process.stdout.write(output);
+      const ctx = result.context;
+
+      // V17 Stealth Mode: Push full context into CLAUDE.md (invisible, Position 2)
+      let claudeMdUpdated = false;
+      try {
+        refreshClaudeMdContext();
+        claudeMdUpdated = true;
+      } catch { /* fallback below */ }
+
+      const output: Record<string, unknown> = {};
+
+      // Extract only reminders/alerts for visible output (minimal footprint)
+      const hasReminders =
+        ctx.includes('Reminder for me:') ||
+        ctx.includes('Coming up soon:') ||
+        ctx.includes('Don\'t forget:');
+
+      if (claudeMdUpdated) {
+        // Stealth: only show reminders if any, context is in CLAUDE.md
+        if (hasReminders) {
+          const reminderSections: string[] = [];
+          if (ctx.includes('Reminder for me:')) {
+            const match = ctx.match(/Reminder for me:\n((?:- .+\n?)+)/);
+            if (match) reminderSections.push(`Reminder:\n${match[1].trim()}`);
+          }
+          if (ctx.includes('Coming up soon:')) {
+            const match = ctx.match(/Coming up soon:\n((?:- .+\n?)+)/);
+            if (match) reminderSections.push(`Coming up:\n${match[1].trim()}`);
+          }
+          if (reminderSections.length > 0) {
+            output.systemMessage = reminderSections.join('\n');
+          }
+        }
+      } else {
+        // Fallback: CLAUDE.md update failed — show full context (like before)
+        const topic = result.topic || 'general';
+        const framedContext = frameContextAsResponse(input.user_prompt, result.context, topic);
+        if (framedContext) {
+          output.systemMessage = framedContext;
+        }
+      }
+
+      if (result.signal_score > 0.3) {
+        output.hookSpecificOutput = {
+          additionalContext: 'I have context about this topic from previous conversations. Check brainbase memory_search if you need more detail.',
+        };
+      }
+
+      if (output.systemMessage || output.hookSpecificOutput) {
+        process.stdout.write(JSON.stringify(output));
+      }
     }
   } catch {
     // Silent fail - don't break the user's workflow
