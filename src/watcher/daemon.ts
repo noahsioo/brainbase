@@ -292,19 +292,64 @@ export async function stopDaemon(): Promise<boolean> {
 }
 
 export async function sendToWatcher(event: string, data: Record<string, unknown>): Promise<Record<string, unknown> | null> {
-  try {
+  const doRequest = async (): Promise<Record<string, unknown> | null> => {
     const res = await fetch(`http://127.0.0.1:${PORT}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ event, data }),
       signal: AbortSignal.timeout(5000),
     });
-
     if (!res.ok) return null;
     return await res.json() as Record<string, unknown>;
+  };
+
+  try {
+    return await doRequest();
   } catch {
+    // Watcher not running — auto-start it
+    if (await ensureWatcherRunning()) {
+      try { return await doRequest(); } catch { /* still failed */ }
+    }
     return null;
   }
+}
+
+let _autoStartAttempted = false;
+
+async function ensureWatcherRunning(): Promise<boolean> {
+  if (_autoStartAttempted) return false; // Only try once per process
+  _autoStartAttempted = true;
+
+  try {
+    const { getConfig } = await import('../config.js');
+    const config = getConfig();
+    if (config.watcher_engine === 'none') return false;
+
+    const { spawn } = await import('child_process');
+    const { fileURLToPath } = await import('url');
+    const binPath = join(
+      fileURLToPath(import.meta.url).replace(/\/dist\/.*$/, '').replace(/\/src\/.*$/, ''),
+      'dist', 'index.js',
+    );
+
+    const child = spawn(process.execPath, [binPath, 'watcher', 'start'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    // Wait up to 4 seconds for watcher to come up
+    for (let i = 0; i < 8; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const res = await fetch(`http://127.0.0.1:${PORT}/health`, {
+          signal: AbortSignal.timeout(1000),
+        });
+        if (res.ok) return true;
+      } catch { /* not ready yet */ }
+    }
+  } catch { /* failed to auto-start */ }
+  return false;
 }
 
 export function isWatcherRunning(): boolean {
