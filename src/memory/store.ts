@@ -120,6 +120,7 @@ export interface WorkingMemory {
   message_count: number;
   last_user_message: string;
   last_assistant_message: string;
+  active_task: string;
   updated_at: number;
   version: number;
 }
@@ -422,6 +423,9 @@ function migrateSchema(db: Database.Database): void {
     }
     if (!workingMemoryCols.some(c => c.name === 'degraded_semantic')) {
       db.exec('ALTER TABLE working_memory ADD COLUMN degraded_semantic INTEGER DEFAULT 0');
+    }
+    if (!workingMemoryCols.some(c => c.name === 'active_task')) {
+      db.exec("ALTER TABLE working_memory ADD COLUMN active_task TEXT DEFAULT ''");
     }
   }
 }

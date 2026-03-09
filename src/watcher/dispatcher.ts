@@ -16,7 +16,7 @@ import { extractTacitPatterns } from '../tacit/tacit-tracker.js';
 import { updateMetaProfile } from '../tacit/meta-learner.js';
 import { updateHotMemoryInDb } from '../memory/hot.js';
 import { getWarmMemoryForTopic, getWarmMemoryForTopicAsync } from '../memory/warm.js';
-import { getDb } from '../memory/store.js';
+import { getDb, updateNode } from '../memory/store.js';
 import type { KeywordFlags } from '../signal/keywords.js';
 import { detectAndStoreExample } from '../extraction/example-detector.js';
 
@@ -279,6 +279,33 @@ export async function dispatchUserPrompt(
   // Wait for all queued tasks to settle
   await Promise.allSettled(promises);
 
+  // Episode Checkpoint — alle 15 Nachrichten eine Mini-Episode erstellen
+  const CHECKPOINT_INTERVAL = 15;
+  if (recentMessages && dispatcherState.messageCount > 0 && dispatcherState.messageCount % CHECKPOINT_INTERVAL === 0) {
+    queue.enqueue('low', 'episode-checkpoint', async () => {
+      try {
+        const db = getDb();
+        const messages = db.prepare(
+          "SELECT role, content FROM raw_buffer WHERE session_id = ? ORDER BY timestamp ASC"
+        ).all(sessionId) as Array<{ role: string; content: string }>;
+
+        if (messages.length >= 5) {
+          const transcriptText = messages.map(m => `${m.role}: ${m.content}`).join('\n');
+          const episode = await extractEpisode(client, transcriptText, sessionId);
+          if (episode) {
+            const meta = episode.metadata ? JSON.parse(episode.metadata) : {};
+            meta.checkpoint = true;
+            meta.message_count = dispatcherState.messageCount;
+            updateNode(episode.id, { metadata: JSON.stringify(meta) });
+            log(`Episode checkpoint at message ${dispatcherState.messageCount}`);
+          }
+        }
+      } catch (err) {
+        log(`Episode checkpoint failed: ${err}`);
+      }
+    }).catch(() => {});
+  }
+
   result.topic = applyResolvedTopic(
     sessionId,
     dispatcherState,
@@ -344,6 +371,22 @@ export async function dispatchSessionEnd(
         }
       } catch {
         // silent
+      }
+    }
+
+    // Fallback: wenn kein Transcript, Episode aus raw_buffer bauen
+    if (!transcriptText && sessionId) {
+      try {
+        const db = getDb();
+        const messages = db.prepare(
+          "SELECT role, content FROM raw_buffer WHERE session_id = ? ORDER BY timestamp ASC"
+        ).all(sessionId) as Array<{ role: string; content: string }>;
+        if (messages.length > 0) {
+          transcriptText = messages.map(m => `${m.role}: ${m.content}`).join('\n');
+          log(`Built transcript from raw_buffer: ${messages.length} messages`);
+        }
+      } catch (err) {
+        log(`raw_buffer fallback failed: ${err}`);
       }
     }
 

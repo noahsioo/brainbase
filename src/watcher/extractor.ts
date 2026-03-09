@@ -116,6 +116,9 @@ If the answer is NO → do NOT store it. Set nothing_new: true instead.
 - Relation: "Lovis" → uses → "better-sqlite3" — specific
 - Fact: "Bevorzugt funktionale Programmierung ueber OOP" — actionable preference
 - Decision: "Wechsel von Firebase zu Supabase wegen Kosten" — specific decision with reason
+- Fact: "Video caption format: 1 motivational sentence + 5 hashtags (#motivation #discipline #selfimprovement #hustle #productive)" — workflow pattern
+- Fact: "Two video types: Routine videos (longer, titled) + Motivation videos (short, caption only)" — content structure
+- Fact: "YouTube description = title + 1 sentence + subscribe CTA + hashtags" — process knowledge
 
 ## ENTITIES
 Atomic concepts: people, technologies, projects, tools, places, foods, skills, organizations.
@@ -139,12 +142,20 @@ Multi-hop: "Lovis builds BrainBase with TypeScript" → 3 relations:
   2. BrainBase → uses → TypeScript
   3. Lovis → uses → TypeScript
 
-## FACTS (RARELY needed — prefer entities+relations)
-Only use facts for these SPECIFIC cases:
+## FACTS (equally important as entities — capture KNOWLEDGE, not just names)
+A brain stores HOW things work, not just THAT they exist. Facts capture the knowledge BEHIND entities.
+Use facts for:
 - A concrete PREFERENCE: "Bevorzugt X ueber Y" (type: preference)
 - A concrete DECISION with reasoning: "Switched from X to Y because Z" (type: decision)
 - User's IDENTITY info: name, age, role, location (type: identity)
 - Code EXAMPLES of user's work style (type: example, up to 2000 chars)
+- A WORKFLOW or process the user follows: "Video caption = 1 motivational sentence + 5 hashtags" (type: workflow)
+  HOW the user does something. Step-by-step patterns, formats, templates, rules they follow.
+  "Meine Captions haben immer 5 Hashtags" → workflow
+  "Routine Video = laengeres Video mit Titel" → workflow
+  "YouTube Beschreibung: Titel + 1 Satz + Subscribe CTA + Hashtags" → workflow
+- A PROCESS or method: "Deploy via Vercel, push to main triggers auto-deploy" (type: process)
+  Technical or creative processes, pipelines, how systems/tools are configured.
 - A REMINDER or future intention: "Naechsten Donnerstag Zahnarzt" (type: reminder)
   The user mentions something they need to do/remember in the future.
   MUST include: WHAT needs to happen. SHOULD include: WHEN (date/time/day).
@@ -160,8 +171,8 @@ Only use facts for these SPECIFIC cases:
   Do NOT use for single events ("Zahnarzt am Mittwoch") — use reminder for those.
   Use life_event ONLY for PHASES: vacation, illness, exam period, new job, moving, travel, etc.
 
-Allowed fact types: preference, decision, identity, example, reminder, life_event
-Do NOT use any other fact type. If info fits as entity+relation, use that instead.
+Allowed fact types: preference, decision, identity, example, workflow, process, reminder, life_event
+IMPORTANT: Extract BOTH entities AND facts. Entities = WHAT exists. Facts = WHAT you KNOW about it.
 
 ## nothing_new RULES
 Set nothing_new: true ONLY for these cases:
@@ -180,7 +191,7 @@ For EVERYTHING ELSE → nothing_new: false. Extract entities and relations.
 6. NEVER store vague observations: "User is exploring...", "User wants to build..."
 7. Only store CONCRETE, NAMED things: a person, a technology, a decision, a preference
 8. confidence between 0.3 and 0.5
-9. Prefer entities+relations over facts. Facts ONLY for preferences/decisions/identity
+9. Extract BOTH entities AND facts. Entities = names/concepts. Facts = knowledge/processes/preferences about them
 10. Max 5 entities per message. If more → keep only the most important
 11. You can UPDATE existing knowledge via the "updates" array
 12. NEVER store garbage. But missing a real entity is worse than being cautious.`;
@@ -254,7 +265,7 @@ Respond with this exact JSON:
     { "from": "EntityA", "to": "EntityB", "type": "uses|likes|dislikes|builds|knows|part_of|works_with|prefers|wants|is_a|located_at|has_skill|related_to", "confidence": 0.3-0.5 }
   ],
   "new_facts": [
-    { "content": "...", "type": "preference|decision|identity|example|reminder|life_event", "confidence": 0.3-0.5, "metadata": { "category": "optional", "starts": "temporal expression for life_event", "duration_days": 14 } }
+    { "content": "...", "type": "preference|decision|identity|example|workflow|process|reminder|life_event", "confidence": 0.3-0.5, "metadata": { "category": "optional", "starts": "temporal expression for life_event", "duration_days": 14 } }
   ],
   "topic": { "name": "short concrete topic", "confidence": 0.0-1.0 },
   "intent": "question|statement|request|feedback|greeting|other",
@@ -269,7 +280,7 @@ RULES:
 - Extract ONLY from the MESSAGE section, NEVER from existing knowledge
 - topic must be a SHORT concrete noun phrase
 - If nothing_new is true, entities/relations/new_facts/updates MUST be empty
-- Prefer entities+relations over facts. Facts ONLY for preferences, decisions, identity, examples, reminders, life_events`;
+- Extract BOTH entities AND facts. Facts capture knowledge, workflows, and processes — not just preferences`;
 }
 
 function getRecentMessages(sessionId: string, limit: number = 10): string {
@@ -619,9 +630,10 @@ export async function extractFromMessageDetailed(
     for (const fact of verified.new_facts) {
       const maxLen = fact.type === 'example' ? 2000 : 300;
       if (!fact.content || fact.content.length < 5 || fact.content.length > maxLen) continue;
-      if (isGarbage(fact.content)) { recordGarbage(); recordGarbageType(fact.content); continue; }
+      const GARBAGE_EXEMPT_TYPES = new Set(['workflow', 'process', 'example', 'reminder', 'life_event']);
+      if (!GARBAGE_EXEMPT_TYPES.has(fact.type) && isGarbage(fact.content)) { recordGarbage(); recordGarbageType(fact.content); continue; }
 
-      const validTypes = ['preference', 'decision', 'identity', 'example', 'reminder', 'life_event'];
+      const validTypes = ['preference', 'decision', 'identity', 'example', 'workflow', 'process', 'reminder', 'life_event'];
       if (!validTypes.includes(fact.type)) continue;
 
       // V6-1: Reminder → Prospective Memory (skip normal fact storage)

@@ -3,7 +3,7 @@ import { getAdaptiveQualityThreshold } from '../learning/self-tuner.js';
 
 export interface ExtractedFact {
   content: string;
-  type: 'preference' | 'fact' | 'decision' | 'task' | 'project' | 'learning' | 'identity' | 'insight' | 'example' | 'reminder' | 'life_event';
+  type: 'preference' | 'fact' | 'decision' | 'task' | 'project' | 'learning' | 'identity' | 'insight' | 'example' | 'workflow' | 'process' | 'reminder' | 'life_event';
   confidence: number;
   metadata?: { category?: string; quality?: number; starts?: string; duration_days?: number };
 }
@@ -173,6 +173,16 @@ export function verifyExtraction(
       continue;
     }
 
+    // Fix 5: Frustration-Rants nicht als Preference speichern
+    if (fact.type === 'preference') {
+      const FRUSTRATION_INDICATORS = /\b(funktioniert nicht|doesn't work|broken|kaputt|nervt|annoying|stupid|dumm|scheisse|shit|fuck|damn|verdammt|sch[eé]i[sß]e|wtf)\b/i;
+      const EXCESSIVE_PUNCTUATION = /[!?]{3,}|\.{4,}/;
+      const CAPS_RATIO = (fact.content.match(/[A-Z]/g) || []).length / Math.max(1, fact.content.length);
+      if (FRUSTRATION_INDICATORS.test(fact.content) || EXCESSIVE_PUNCTUATION.test(fact.content) || CAPS_RATIO > 0.5) {
+        continue;
+      }
+    }
+
     let content = fact.content;
     if (EMOTIONAL_ABSOLUTES.test(content)) {
       content = cleanEmotionalContent(content);
@@ -283,7 +293,7 @@ export function calculateQualityScore(content: string, type: string): number {
   }
 
   // Identity/example/reminder types get a small bonus (usually intentional)
-  if (type === 'identity' || type === 'example' || type === 'reminder') {
+  if (type === 'identity' || type === 'example' || type === 'reminder' || type === 'workflow' || type === 'process') {
     score += 0.2;
   }
 

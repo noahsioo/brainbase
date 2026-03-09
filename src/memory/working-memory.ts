@@ -14,6 +14,7 @@ export interface WorkingMemoryUpdateInput {
   taskMode?: string;
   mood?: string;
   sessionLength?: number;
+  extractedFacts?: Array<{ content: string; type: string }>;
 }
 
 interface WorkingMemoryRow {
@@ -30,6 +31,7 @@ interface WorkingMemoryRow {
   message_count: number;
   last_user_message: string;
   last_assistant_message: string;
+  active_task?: string;
   updated_at: number;
   version: number;
 }
@@ -83,6 +85,19 @@ export function initWorkingMemory(sessionId: string): WorkingMemory {
   }
 
   const memory = createEmptyWorkingMemory(sessionId);
+
+  // Cross-Session Bridge: Task State aus vorheriger Session laden
+  try {
+    const db = getDb();
+    const bridgeRaw = db.prepare("SELECT value FROM system_state WHERE key = 'session_bridge'").get() as { value: string } | undefined;
+    if (bridgeRaw) {
+      const bridge = JSON.parse(bridgeRaw.value);
+      if (bridge.active_task) {
+        memory.active_task = bridge.active_task;
+      }
+    }
+  } catch { /* non-fatal */ }
+
   saveWorkingMemory(memory);
   return memory;
 }
@@ -105,9 +120,9 @@ export function saveWorkingMemory(memory: WorkingMemory): void {
     INSERT INTO working_memory (
       session_id, current_topic, topic_history, active_entities, conversation_summary,
       open_questions, context_stack, "references", degraded_semantic, last_message_intent, message_count,
-      last_user_message, last_assistant_message, updated_at, version
+      last_user_message, last_assistant_message, active_task, updated_at, version
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET
       current_topic = excluded.current_topic,
       topic_history = excluded.topic_history,
@@ -121,6 +136,7 @@ export function saveWorkingMemory(memory: WorkingMemory): void {
       message_count = excluded.message_count,
       last_user_message = excluded.last_user_message,
       last_assistant_message = excluded.last_assistant_message,
+      active_task = excluded.active_task,
       updated_at = excluded.updated_at,
       version = excluded.version
   `).run(
@@ -137,6 +153,7 @@ export function saveWorkingMemory(memory: WorkingMemory): void {
     normalized.message_count,
     normalized.last_user_message,
     normalized.last_assistant_message,
+    normalized.active_task,
     normalized.updated_at,
     normalized.version,
   );
@@ -179,9 +196,29 @@ export function updateWorkingMemory(input: WorkingMemoryUpdateInput): WorkingMem
     message_count: previous.message_count + 1,
     last_user_message: normalizeMessage(input.message),
     last_assistant_message: previous.last_assistant_message,
+    active_task: previous.active_task || '',
     updated_at: Date.now(),
     version: Math.max(previous.version, 1),
   };
+
+  // Task State aus extrahierten Workflow/Process Facts fuellen
+  if (input.extractedFacts) {
+    const workflowFacts = input.extractedFacts
+      .filter(f => f.type === 'workflow' || f.type === 'process')
+      .map(f => f.content)
+      .slice(0, 3);
+
+    if (workflowFacts.length > 0) {
+      try {
+        const existingTask = memory.active_task ? JSON.parse(memory.active_task) : null;
+        const task = existingTask || { description: memory.current_topic, key_decisions: [], current_step: '' };
+        task.key_decisions = [...new Set([...task.key_decisions, ...workflowFacts])].slice(0, 5);
+        memory.active_task = JSON.stringify(task);
+      } catch {
+        memory.active_task = JSON.stringify({ description: memory.current_topic, key_decisions: workflowFacts, current_step: '' });
+      }
+    }
+  }
 
   memory.conversation_summary = buildConversationSummary(input.sessionId, memory, {
     taskMode: input.taskMode,
@@ -276,6 +313,7 @@ export function finalizeWorkingMemory(sessionId: string): string | null {
       context_stack: bridgeStack,
       intent: memory.last_message_intent,
       message_count: memory.message_count,
+      active_task: memory.active_task || '',
       timestamp: Date.now(),
     };
     db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
@@ -376,6 +414,7 @@ function createEmptyWorkingMemory(sessionId: string): WorkingMemory {
     message_count: 0,
     last_user_message: '',
     last_assistant_message: '',
+    active_task: '',
     updated_at: Date.now(),
     version: 1,
   };
@@ -396,6 +435,7 @@ function mapWorkingMemoryRow(row: WorkingMemoryRow): WorkingMemory {
     message_count: Number(row.message_count) || 0,
     last_user_message: row.last_user_message || '',
     last_assistant_message: row.last_assistant_message || '',
+    active_task: row.active_task || '',
     updated_at: Number(row.updated_at) || Date.now(),
     version: Number(row.version) || 1,
   });
@@ -416,6 +456,7 @@ function normalizeWorkingMemory(memory: WorkingMemory): WorkingMemory {
     message_count: Math.max(0, Math.floor(memory.message_count || 0)),
     last_user_message: normalizeMessage(memory.last_user_message),
     last_assistant_message: normalizeMessage(memory.last_assistant_message),
+    active_task: memory.active_task || '',
     updated_at: memory.updated_at || Date.now(),
     version: Math.max(1, Math.floor(memory.version || 1)),
   };
@@ -447,6 +488,38 @@ const GARBAGE_ENTITY_WORDS = new Set([
   'sagen', 'fragen', 'denke', 'denken', 'glaube', 'glauben',
   'finde', 'finden', 'brauche', 'brauchen', 'nutze', 'nutzen',
   'heisst', 'heisse', 'weisst', 'wissen', 'ueber',
+  // Fragewoerter/Adverbien die als Entities durchrutschen
+  'wieso', 'warum', 'weshalb', 'woher', 'wohin', 'wofuer',
+  'versteht', 'verstehe', 'verstehen', 'verstanden',
+  'crazy', 'krass', 'heftig', 'geil', 'wild', 'mega', 'ultra',
+  'sozusagen', 'quasi', 'praktisch', 'grundsaetzlich', 'fundamental',
+  'gleichzeitig', 'irgendwie', 'irgendwann', 'irgendwo', 'irgendwas',
+  'funktioniert', 'funktionieren', 'passiert', 'passieren',
+  'ernsthaft', 'natuerlich', 'selbstverstaendlich', 'offensichtlich',
+  'mehrere', 'verschiedene', 'einzelne', 'bestimmte', 'gewisse',
+  'moeglich', 'unmoeglich', 'wichtig', 'unwichtig',
+  'genauso', 'trotzdem', 'deshalb', 'deswegen', 'darum',
+  'erstmal', 'mittlerweile', 'zwischendurch',
+  'ansonsten', 'ausserdem', 'allerdings', 'jedenfalls',
+  'ueberhaupt', 'ungefaehr', 'ziemlich', 'relativ',
+  'schnell', 'langsam', 'sofort', 'direkt', 'indirekt',
+  'extrahiert', 'extrahieren', 'speichert', 'speichern',
+  'schickt', 'schicken', 'kriegt', 'kriegen', 'bekommt', 'bekommen',
+  'existiere', 'existiert', 'existieren',
+  'installieren', 'reinstallieren', 'updaten',
+  'erwartet', 'erwarten', 'erklaeren', 'erklären',
+  'durchgehend', 'durchdenken', 'durchgehen',
+  'hundertprozent', 'prozent',
+  'zuversichtlich', 'zuversicht',
+  'ausblendet', 'ausblenden', 'einblendet', 'einblenden',
+  'basierend', 'relevant', 'relevanz', 'kontext',
+  'unterhaltung', 'unterhalte', 'unterhalten',
+  'riesigen', 'riesig', 'kompletten', 'ganzen', 'ganze', 'ganzes',
+  'besser', 'schlechter', 'groesser', 'kleiner',
+  'vorne', 'hinten', 'oben', 'unten', 'links', 'rechts',
+  'selber', 'selbst', 'gleiche', 'gleichen', 'gleicher',
+  'normalerweise', 'normalem', 'normales', 'normaler',
+  'beschreiben', 'beschreibung', 'beschreibungen',
 ]);
 
 export function isRealEntity(name: string): boolean {

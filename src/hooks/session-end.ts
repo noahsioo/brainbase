@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 import { endSession, getDb } from '../memory/store.js';
 import { sendToWatcher } from '../watcher/daemon.js';
 import { getConfig } from '../config.js';
@@ -43,7 +46,13 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
       sendToWatcher('session-end', {
         session_id: input.session_id,
         transcript_path: input.transcript_path,
-      }).catch(() => {});
+      }).catch((err) => {
+        try {
+          const logDir = join(homedir(), '.brainbase/logs');
+          mkdirSync(logDir, { recursive: true });
+          appendFileSync(join(logDir, 'watcher.log'), `[${new Date().toISOString()}] [session-end-hook] sendToWatcher failed: ${err}\n`);
+        } catch {}
+      });
     } else if (config.watcher_engine === 'session' && input.session_id) {
       // Session mode: parse transcript locally via regex + entity counters
       parseTranscriptLocally(input.session_id);

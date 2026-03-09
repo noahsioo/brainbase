@@ -438,6 +438,13 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
 
   let watcherResponse: Record<string, unknown> | null = null;
   let watcherSystemMessage: string | undefined;
+
+  // Start message embedding in parallel with watcher call (saves 1-2s)
+  const embClient = shouldPersistState ? createEmbeddingClient() : null;
+  const messageEmbPromise = embClient
+    ? embClient.embed(input.message).catch((): null => null)
+    : Promise.resolve(null);
+
   if (shouldPersistState && signal.combined >= GATE_LLM) {
     const config = getConfig();
     if (config.watcher_engine !== 'none' && config.watcher_engine !== 'session') {
@@ -639,24 +646,22 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     }, sessionId);
   }
 
-  // Pre-embed query for semantic search (non-blocking, best-effort)
+  // Await message embedding (started in parallel with watcher above — saves 1-2s)
   if (shouldPersistState) {
-    const embClient = createEmbeddingClient();
-    if (embClient) {
-      try {
-        const queryVec = await embClient.embed(input.message);
-        setQueryEmbedding(input.message, queryVec);
-        setSessionMessageEmbedding(queryVec);
-        if (effectiveTopic) {
+    const messageVec = await messageEmbPromise;
+    if (messageVec) {
+      setQueryEmbedding(input.message, messageVec);
+      setSessionMessageEmbedding(messageVec);
+      if (effectiveTopic && embClient) {
+        try {
           const topicVec = await embClient.embed(effectiveTopic);
           setQueryEmbedding(effectiveTopic, topicVec);
           setSessionTopicEmbedding(topicVec);
-        } else {
+        } catch {
           setSessionTopicEmbedding(null);
         }
-      } catch {
+      } else {
         setSessionTopicEmbedding(null);
-        setSessionMessageEmbedding(null);
       }
     } else {
       setSessionTopicEmbedding(null);
