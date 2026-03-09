@@ -210,6 +210,25 @@ export function finalizeWorkingMemory(sessionId: string): string | null {
   const summary = summaryParts.join('\n');
   const db = getDb();
   db.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run(summary, sessionId);
+
+  // V9-4: Cross-Session Bridge — State fuer naechste Session speichern
+  try {
+    const bridgeState = {
+      last_topic: memory.current_topic,
+      top_entities: Object.entries(memory.active_entities)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([name, score]) => ({ name, score })),
+      open_questions: memory.open_questions.slice(0, 3),
+      context_stack: memory.context_stack.slice(0, 3),
+      intent: memory.last_message_intent,
+      message_count: memory.message_count,
+      timestamp: Date.now(),
+    };
+    db.prepare("INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)")
+      .run('session_bridge', JSON.stringify(bridgeState), Date.now());
+  } catch { /* non-fatal */ }
+
   return summary;
 }
 

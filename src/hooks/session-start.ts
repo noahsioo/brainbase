@@ -1,7 +1,7 @@
-import { createSession, getDb } from '../memory/store.js';
+import { createSession, getDb, findEntityByName } from '../memory/store.js';
 import { generateContext } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
-import { clearSessionActivationOverlay } from '../memory/activation.js';
+import { clearSessionActivationOverlay, activateNode } from '../memory/activation.js';
 import { incrementSessionCount, isCriticalPeriod, getDevelopmentPhase } from '../memory/cold-start.js';
 import { getConfig } from '../config.js';
 import { buildPrediction, savePrediction } from '../signal/prediction.js';
@@ -30,6 +30,7 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     clearSessionActivationOverlay(sessionId);
     createSession('claude-code', sessionId);
     initWorkingMemory(sessionId);
+    loadSessionBridge(sessionId);
     getScope(sessionId);
 
     // V3 Phase 6: Consolidation bei >6h seit letzter
@@ -107,6 +108,36 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     });
     process.stdout.write(fallback);
   }
+}
+
+function loadSessionBridge(sessionId: string): void {
+  try {
+    const db = getDb();
+    const row = db.prepare("SELECT value FROM system_state WHERE key = 'session_bridge'")
+      .get() as { value: string } | undefined;
+    if (!row) return;
+
+    const bridge = JSON.parse(row.value) as {
+      last_topic: string;
+      top_entities: Array<{ name: string; score: number }>;
+      open_questions: string[];
+      timestamp: number;
+    };
+
+    // Bridge nur 24h gueltig
+    const ageHours = (Date.now() - bridge.timestamp) / (1000 * 60 * 60);
+    if (ageHours > 24) return;
+
+    // Frischer Bridge = staerkere Aktivierung
+    const energyScale = ageHours < 2 ? 0.5 : ageHours < 8 ? 0.3 : 0.15;
+
+    for (const entity of bridge.top_entities) {
+      const entityNode = findEntityByName(entity.name);
+      if (entityNode) {
+        activateNode(entityNode.id, entity.score * energyScale, sessionId);
+      }
+    }
+  } catch { /* non-fatal */ }
 }
 
 function getLastSessionSummary(): string | null {

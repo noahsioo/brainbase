@@ -67,13 +67,24 @@ export function checkProspectiveTriggers(message: string): ProspectiveMatch[] {
 
     // Event-Based: Keyword-Match (bestehendes System)
     if (!matched) {
-      const triggerStr = node.emotional_tag?.replace('trigger:', '') || '';
-      const triggerWords = triggerStr.split(',').filter(w => w.length > 0);
-      for (const tw of triggerWords) {
-        if (lower.includes(tw)) {
-          matched = true;
-          trigger = tw;
-          break;
+      // Check dismissal for event triggers too
+      let dismissed = false;
+      if (node.metadata) {
+        try {
+          const meta = JSON.parse(node.metadata) as Record<string, unknown>;
+          dismissed = Boolean(meta.dismissed);
+        } catch { /* skip */ }
+      }
+
+      if (!dismissed) {
+        const triggerStr = node.emotional_tag?.replace('trigger:', '') || '';
+        const triggerWords = triggerStr.split(',').filter(w => w.length > 0);
+        for (const tw of triggerWords) {
+          if (lower.includes(tw)) {
+            matched = true;
+            trigger = tw;
+            break;
+          }
         }
       }
     }

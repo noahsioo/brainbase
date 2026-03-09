@@ -31,6 +31,10 @@ export type DetailMode = 'MAXIMUM' | 'STANDARD' | 'LIGHT' | 'MINIMAL';
 // 15.2: Module-level mode for JOL filtering in slot functions
 let _currentMode: DetailMode = 'STANDARD';
 
+// V9-3: Intent-Modulated Retrieval — module-level state
+let _currentIntent: string = 'other';
+let _currentTaskModeForIntent: string | undefined;
+
 interface ContextBudget {
   entityProfile: number;
   activeContext: number;
@@ -244,6 +248,23 @@ function getContextRepeatPenalty(node: Node, history: ContextOutputWindow[]): nu
   return Math.max(floor, 1 - recentOutputWeight * 0.6);
 }
 
+// V9-3: Intent-Modulated Type Boost — bevorzugt Node-Types je nach Intent
+function getIntentTypeBoost(nodeType: string): number {
+  if (_currentTaskModeForIntent === 'debugging') {
+    if (nodeType === 'fact' || nodeType === 'decision') return 0.12;
+    return 0;
+  }
+  if (_currentIntent === 'request') {
+    if (nodeType === 'preference' || nodeType === 'example' || nodeType === 'style_dna' || nodeType === 'identity') return 0.12;
+    return 0;
+  }
+  if (_currentIntent === 'question') {
+    if (nodeType === 'fact' || nodeType === 'decision' || nodeType === 'schema') return 0.10;
+    return 0;
+  }
+  return 0;
+}
+
 function getActiveContextNodeScore(
   node: Node,
   history: ContextOutputWindow[],
@@ -267,6 +288,9 @@ function getActiveContextNodeScore(
   } else {
     baseSignal = Math.max(activation + freshness, importance * 0.35);
   }
+
+  // V9-3: Intent-Modulated Type Boost
+  baseSignal += getIntentTypeBoost(node.type);
 
   const feedbackMultiplier = getContextFeedbackMultiplier(node, sessionFeedback);
   const repeatPenalty = getContextRepeatPenalty(node, history);
@@ -2104,6 +2128,10 @@ export function generateContext(
   const effectiveEmpathyMode = runtimeState.empathyMode;
   const effectiveContextSignal = runtimeState.contextSignal;
   const sessionWorkingMemory = sessionId ? getWorkingMemory(sessionId) : null;
+
+  // V9-3: Intent state fuer Node-Type Boosting
+  _currentIntent = sessionWorkingMemory?.last_message_intent || 'other';
+  _currentTaskModeForIntent = effectiveTaskMode;
   const sessionPhaseProfile = getSessionPhaseBudgetProfile(sessionId, effectiveContextSignal, sessionWorkingMemory);
 
   // V8-1: Budget-Modifier vereinfacht — nur noch Base + SessionPhase + Provider
