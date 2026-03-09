@@ -517,7 +517,21 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       applyDisinhibition(input.message, sessionId);
     }
 
-    activateByEntities(effectiveEntities, sessionId);
+    // V8-2: WM-driven activation — merge semantic entities + WM top entities
+    const wmForActivation = getWorkingMemory(sessionId);
+    const wmTopEntities = Object.entries(wmForActivation?.active_entities || {})
+      .filter(([, score]) => score >= 0.15)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([entity]) => entity);
+
+    const mergedEntities = uniqueLiveValues([...effectiveEntities, ...wmTopEntities]);
+    activateByEntities(
+      mergedEntities.length > 0
+        ? mergedEntities
+        : (wmForActivation?.current_topic ? [wmForActivation.current_topic] : []),
+      sessionId,
+    );
 
     // M6: Sensory Gating — apply dampening to over-mentioned entities
     if (Object.keys(signal.dampening).length > 0) {

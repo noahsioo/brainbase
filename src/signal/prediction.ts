@@ -1,5 +1,6 @@
 import { getDb } from '../memory/store.js';
 import { getSystemState, setSystemState } from '../memory/cold-start.js';
+import { getOpenTasks } from '../watcher/task-watcher.js';
 
 export interface Prediction {
   expected_topic: string;
@@ -11,10 +12,10 @@ export function buildPrediction(): Prediction | null {
   const db = getDb();
 
   const lastSession = db.prepare(`
-    SELECT topics FROM sessions
+    SELECT id, topics FROM sessions
     WHERE ended_at IS NOT NULL
     ORDER BY ended_at DESC LIMIT 1
-  `).get() as { topics: string } | undefined;
+  `).get() as { id: string; topics: string } | undefined;
 
   if (lastSession) {
     try {
@@ -28,6 +29,15 @@ export function buildPrediction(): Prediction | null {
       }
     } catch {
       // skip
+    }
+
+    const sessionTasks = getOpenTasks(lastSession.id);
+    if (sessionTasks.length > 0) {
+      return {
+        expected_topic: sessionTasks[0].content,
+        confidence: 0.4,
+        based_on: 'tasks',
+      };
     }
   }
 

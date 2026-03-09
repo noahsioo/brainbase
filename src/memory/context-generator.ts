@@ -9,14 +9,13 @@ import { getChunksForContext } from './chunking.js';
 import { getRelevantFailures } from './prospective.js';
 import { cosineSimilarity, getEmbeddingCache } from '../llm/embeddings.js';
 import { getOpenGaps } from '../learning/gap-detector.js';
-import { buildUserModel, getTopicExpertise } from '../learning/user-model.js';
+// V8-1: buildUserModel, getTopicExpertise entfernt (Budget-Modifier vereinfacht)
 import { getProviderProfile, peekProviderProfile, recordContextDelivery, type ContextStyle } from '../learning/ai-profiles.js';
 import { calculateJOL } from '../meta/metacognition.js';
 import { getSelfModel, calibrateConfidence } from '../meta/self-model.js';
 import { getSystemMood } from '../senses/interoception.js';
 import { savePrediction } from '../regulation/comparator.js';
-import { getStressLevel } from '../regulation/stress-response.js';
-import { getTradeoffState } from '../regulation/tradeoffs.js';
+// V8-1: getStressLevel, getTradeoffState entfernt (Budget-Modifier vereinfacht)
 import { getWorkingMemory } from './working-memory.js';
 import { generateSpecificImpulse, type HungerZone } from './knowledge-hunger.js';
 import {
@@ -88,9 +87,10 @@ const BUDGETS: Record<DetailMode, ContextBudget> = {
 
 // 11.5: Track which node IDs are used in context (for Cerebellum feedback)
 const contextNodeIds = new Set<string>();
-const MAX_CONTEXT_OUTPUT_HISTORY_WINDOWS = 5;
+// V8-3: Erweiterte History fuer staerkere Repeat-Penalty
+const MAX_CONTEXT_OUTPUT_HISTORY_WINDOWS = 10;
 const MAX_CONTEXT_OUTPUT_HISTORY_NODE_IDS = 50;
-const CONTEXT_OUTPUT_HISTORY_TTL_MS = 30 * 60 * 1000;
+const CONTEXT_OUTPUT_HISTORY_TTL_MS = 60 * 60 * 1000;
 
 interface ContextOutputWindow {
   node_ids: string[];
@@ -239,8 +239,9 @@ function getContextRepeatPenalty(node: Node, history: ContextOutputWindow[]): nu
   const recentOutputWeight = getRecentOutputWeight(node.id, history);
   if (recentOutputWeight <= 0) return 1;
 
-  const floor = isRepeatPenaltyProtected(node) ? 0.5 : 0.15;
-  return Math.max(floor, 1 - recentOutputWeight * 0.45);
+  // V8-3: Schaerfere Repeat-Penalty
+  const floor = isRepeatPenaltyProtected(node) ? 0.25 : 0.05;
+  return Math.max(floor, 1 - recentOutputWeight * 0.6);
 }
 
 function getActiveContextNodeScore(
@@ -253,12 +254,18 @@ function getActiveContextNodeScore(
   const importance = node.importance || 0;
   const semanticScore = getSemanticRelevanceScore(node);
 
+  // V8-4: Freshness Bias — kuerzlich aktivierte Nodes bekommen Bonus
+  const timeSinceActivation = Date.now() - (node.last_activated || 0);
+  const freshness = timeSinceActivation < 5 * 60 * 1000 ? 0.15 :
+                    timeSinceActivation < 30 * 60 * 1000 ? 0.08 :
+                    timeSinceActivation < 60 * 60 * 1000 ? 0.03 : 0;
+
   let baseSignal: number;
   if (semanticScore > 0.1) {
     const normalizedActivation = Math.min(1, activation);
-    baseSignal = 0.60 * semanticScore + 0.30 * normalizedActivation + 0.10 * importance;
+    baseSignal = 0.50 * semanticScore + 0.25 * normalizedActivation + 0.10 * importance + 0.15 * freshness;
   } else {
-    baseSignal = Math.max(activation, importance * 0.35);
+    baseSignal = Math.max(activation + freshness, importance * 0.35);
   }
 
   const feedbackMultiplier = getContextFeedbackMultiplier(node, sessionFeedback);
@@ -974,10 +981,9 @@ function getContextEffectivenessScore(
 }
 
 function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: string, salience?: string, sessionId?: string): string {
-  // 22.3: Speed-Accuracy Tradeoff — dynamische Node-Limits
-  const tradeoffs = getTradeoffState();
-  const nodeLimit = Math.round(15 + (1 - tradeoffs.speed_accuracy) * 25);
-  const minActivation = 0.02 + tradeoffs.speed_accuracy * 0.08;
+  // V8-5: Feste Node-Limits (Tradeoff-Modulation entfernt)
+  const nodeLimit = 25;
+  const minActivation = 0.05;
 
   const activated = getActivatedNodes(nodeLimit, sessionId);
   const semanticCandidates = getSemanticCandidateNodes(nodeLimit);
@@ -2096,87 +2102,11 @@ export function generateContext(
   const effectiveCurrentMood = currentMood ?? runtimeState.mood;
   const effectiveTaskMode = taskMode ?? runtimeState.taskMode ?? undefined;
   const effectiveEmpathyMode = runtimeState.empathyMode;
-  const effectiveAttentionState = runtimeState.attentionState;
   const effectiveContextSignal = runtimeState.contextSignal;
   const sessionWorkingMemory = sessionId ? getWorkingMemory(sessionId) : null;
   const sessionPhaseProfile = getSessionPhaseBudgetProfile(sessionId, effectiveContextSignal, sessionWorkingMemory);
 
-  // 13.1: User Model — expertise-based budget adjustment
-  const userModel = buildUserModel(sessionId);
-  const topicExpertise = getTopicExpertise(userModel, currentTopic);
-
-  if (topicExpertise > 0.7) {
-    budget.entityProfile = Math.round(budget.entityProfile * 0.6);
-    budget.activeContext = Math.round(budget.activeContext * 1.2);
-  } else if (topicExpertise < 0.3) {
-    budget.entityProfile = Math.round(budget.entityProfile * 1.3);
-  }
-
-  // 13.2: Empathy Mode — adjust budgets based on emotional state
-  if (effectiveEmpathyMode === 'affective') {
-    budget.entityProfile = Math.round(budget.entityProfile * 1.4);
-    budget.serendipity = 0;
-  }
-
-  // 13.3: Task-Set — mode-specific budget adjustment
-  switch (effectiveTaskMode) {
-    case 'debugging':
-      budget.extras = Math.round(budget.extras * 1.5);
-      budget.serendipity = 0;
-      break;
-    case 'learning':
-      budget.entityGraph = Math.round(budget.entityGraph * 1.3);
-      break;
-    case 'exploring':
-      budget.serendipity = Math.round(budget.serendipity * 2.0);
-      budget.entityGraph = Math.round(budget.entityGraph * 1.2);
-      break;
-    case 'reviewing':
-      budget.entityProfile = Math.round(budget.entityProfile * 1.3);
-      break;
-    case 'chatting':
-      budget.activeContext = Math.round(budget.activeContext * 0.5);
-      budget.extras = Math.round(budget.extras * 0.3);
-      budget.entityGraph = Math.round(budget.entityGraph * 0.3);
-      break;
-    case 'urgent':
-      budget.serendipity = 0;
-      budget.extras = Math.round(budget.extras * 0.5);
-      break;
-  }
-
-  // 15.3c: Executive → meta-information depth
-  if (effectiveAttentionState) {
-    const executiveLevel = effectiveAttentionState.executive || 0.5;
-    if (executiveLevel > 0.7) {
-      budget.extras = Math.round(budget.extras * 1.4);
-      budget.entityGraph = Math.round(budget.entityGraph * 1.2);
-    }
-    if (executiveLevel < 0.3) {
-      budget.extras = Math.round(budget.extras * 0.5);
-      budget.serendipity = Math.round(budget.serendipity * 0.3);
-    }
-  }
-
-  // 17.4: System-Mood → Context Modulation
-  const sysMood = getSystemMood();
-  if (sysMood.energy < 0.3) {
-    budget.serendipity = 0;
-    budget.extras = Math.round(budget.extras * 0.5);
-  }
-  if (sysMood.curiosity > 0.7) {
-    budget.serendipity = Math.round(budget.serendipity * 1.5);
-    budget.entityGraph = Math.round(budget.entityGraph * 1.2);
-  }
-
-  // 21.5: Stress-Response — unter Stress weniger kreativ, nur bewaehrte Pfade
-  const stressLevel = getStressLevel(sessionId);
-  if (stressLevel === 'stressed') {
-    budget.serendipity = 0;
-    budget.extras = Math.round(budget.extras * 0.5);
-  } else if (stressLevel === 'recovery') {
-    budget.serendipity = 0; // noch kein Serendipity, aber normale extras
-  }
+  // V8-1: Budget-Modifier vereinfacht — nur noch Base + SessionPhase + Provider
 
   // 14.1+14.2: Provider-specific budget scaling + format
   let contextStyle: ContextStyle = 'narrative';
@@ -2260,11 +2190,6 @@ export function generateContext(
 
   // Entity Profile — nur bei Session-Start oder Bootstrap
   if (slots.showEntityProfile) {
-    if (sessionPhaseProfile.showDistilledProfile) {
-      const distilledProfile = buildDistilledProfileSlot(budget.entityProfile);
-      if (distilledProfile) sections.push(distilledProfile);
-    }
-
     const entityProfile = buildEntityProfileSlot(budget.entityProfile, effectiveEmpathyMode, currentTopic, sessionId);
     if (entityProfile) sections.push(entityProfile);
   }
@@ -2287,21 +2212,8 @@ export function generateContext(
     if (entityGraph) sections.push(entityGraph);
   }
 
-  // Serendipity — selten, nur in deep sessions
-  if (slots.showSerendipity) {
-    const serendipity = buildSerendipitySlot(budget.serendipity, effectiveCurrentMood, salienceMode);
-    if (serendipity) sections.push(serendipity);
-  }
-
-  // Extras — nur periodisch oder bei Bedarf
+  // V8-1: Extras — nur noch Conflicts + Tasks + Failures (Meta-Noise entfernt)
   if (slots.showExtras && (effectiveMode === 'MAXIMUM' || effectiveMode === 'STANDARD')) {
-    const activatedNodes = getActivatedNodes(30, sessionId);
-    const backgroundThoughts = buildBackgroundThoughtsSlot(budget.serendipity, activatedNodes, sessionId);
-    if (backgroundThoughts) sections.push(backgroundThoughts);
-
-    const ghostCtx = buildGhostContextSlot(budget.extras, currentTopic, topicExpertise, sessionPhaseProfile.phase);
-    if (ghostCtx) sections.unshift(ghostCtx);
-
     if (sessionPhaseProfile.showSessionMomentum && !shouldShowTasksEarly) {
       const taskReminder = buildTaskReminderSlot(budget.sessionMomentum, sessionId);
       if (taskReminder) sections.push(taskReminder);
@@ -2314,39 +2226,6 @@ export function generateContext(
 
     const conflicts = buildConflictSlot(budget.extras, sessionId);
     if (conflicts) sections.push(conflicts);
-
-    const counterEvidence = buildCounterEvidenceSlot(budget.extras, sessionId);
-    if (counterEvidence) sections.push(counterEvidence);
-
-    const hungerHint = buildHungerSlot(sessionId);
-    if (hungerHint) sections.push(hungerHint);
-
-    const metaInsight = buildMetaInsightSlot(
-      budget.extras,
-      topicExpertise,
-      effectiveEmpathyMode,
-      effectiveTaskMode,
-      sessionId,
-      currentTopic,
-      sessionPhaseProfile.phase,
-    );
-    if (metaInsight) sections.push(metaInsight);
-
-    const episodes = buildEpisodeSlot(budget.entityGraph, currentTopic, sessionId);
-    if (episodes) sections.push(episodes);
-
-    const styleDna = buildStyleSlot(budget.extras, currentTopic);
-    if (styleDna) sections.push(styleDna);
-
-    const exampleBudget = effectiveMode === 'MAXIMUM' ? 2000 : 1000;
-    const examples = buildExamplesSlot(exampleBudget, currentTopic, sessionId);
-    if (examples) sections.push(examples);
-
-    const tot = buildTipOfTongueSlot(budget.extras, currentTopic, sessionId);
-    if (tot) sections.push(tot);
-
-    const prospection = buildProspectionSlot(budget.extras, currentTopic, sessionId, readOnly);
-    if (prospection) sections.push(prospection);
   }
 
   if (sections.length === 0) {
