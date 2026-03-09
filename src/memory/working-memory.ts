@@ -226,12 +226,11 @@ export function finalizeWorkingMemory(sessionId: string): string | null {
       .slice(0, 5)
       .map(([name, score]) => ({ name, score }));
 
-    // Graph-Entities priorisieren, WM-Entities als Fallback
+    // V12: Graph-Entities priorisieren, WM-Entities nur als Fallback, Garbage filtern
     const allEntities = [
       ...graphEntities.map(e => ({ name: e.content, score: e.activation })),
-      ...wmEntities,
+      ...wmEntities.filter(e => isRealEntity(e.name)),
     ];
-    // Deduplizieren nach Name (case-insensitive)
     const seen = new Set<string>();
     const topEntities = allEntities.filter(e => {
       const key = e.name.toLowerCase();
@@ -240,11 +239,23 @@ export function finalizeWorkingMemory(sessionId: string): string | null {
       return true;
     }).slice(0, 8);
 
+    // V12: Bridge topic/stack aus Graph-Entities statt WM-Wort-Fragmenten
+    const graphEntityNames = graphEntities
+      .filter(e => e.content.length > 2)
+      .slice(0, 3)
+      .map(e => e.content);
+    const bridgeTopic = graphEntityNames.length > 0
+      ? graphEntityNames.join(', ')
+      : memory.current_topic;
+    const bridgeStack = graphEntityNames.length > 0
+      ? graphEntityNames.slice(0, 3)
+      : memory.context_stack.slice(0, 3);
+
     const bridgeState = {
-      last_topic: memory.current_topic,
+      last_topic: bridgeTopic,
       top_entities: topEntities,
       open_questions: memory.open_questions.slice(0, 3),
-      context_stack: memory.context_stack.slice(0, 3),
+      context_stack: bridgeStack,
       intent: memory.last_message_intent,
       message_count: memory.message_count,
       timestamp: Date.now(),
@@ -392,6 +403,32 @@ function normalizeWorkingMemory(memory: WorkingMemory): WorkingMemory {
   };
 }
 
+// V12: Garbage-Filter — naive Wort-Fragmente die keine echten Entities sind
+const GARBAGE_ENTITY_WORDS = new Set([
+  'ja', 'nein', 'ok', 'okay', 'gut', 'also', 'halt', 'eben', 'noch',
+  'voll', 'echt', 'gerade', 'weiter', 'fertig', 'stimmt', 'genau',
+  'super', 'cool', 'nice', 'first', 'second', 'third', 'fourth',
+  'erstens', 'zweitens', 'drittens', 'viertens', 'eigentlich',
+  'komisch', 'dumm', 'lustig', 'richtig', 'falsch', 'sicher',
+  'mal', 'hier', 'dort', 'jetzt', 'dann', 'weil', 'dass',
+  'gleich', 'nochmal', 'kurz', 'einfach', 'klar', 'schon',
+  'andere', 'alles', 'anderen', 'bisschen', 'wirklich', 'komplett',
+  'perfekt', 'hundertprozentig', 'irgendwelche', 'proaktiv',
+  'machen', 'sachen', 'dingen', 'sache', 'ding', 'dritte',
+  'checken', 'testen', 'schauen', 'gucken', 'zeigen',
+  'haben', 'sind', 'werden', 'muss', 'kann', 'soll',
+  'noch', 'aber', 'oder', 'und', 'nicht', 'kein',
+  'woran', 'arbeite', 'arbeiten', 'mache', 'mach',
+]);
+
+export function isRealEntity(name: string): boolean {
+  const lower = name.toLowerCase().trim();
+  if (lower.length < 3) return false;
+  if (GARBAGE_ENTITY_WORDS.has(lower)) return false;
+  if (lower.length <= 4 && /^[a-zäöüß]+$/.test(lower)) return false;
+  return true;
+}
+
 function updateActiveEntities(
   existing: Record<string, number>,
   focusEntities: string[] | undefined,
@@ -405,7 +442,11 @@ function updateActiveEntities(
     }
   }
 
-  for (const entity of uniqueNonEmpty((focusEntities || []).map(normalizeTopic))) {
+  // V12: Filter garbage words before adding as entities
+  const filtered = uniqueNonEmpty((focusEntities || []).map(normalizeTopic))
+    .filter(isRealEntity);
+
+  for (const entity of filtered) {
     const previous = next.get(entity) || 0;
     next.set(entity, Math.min(1, previous + ENTITY_BOOST));
   }

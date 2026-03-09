@@ -596,6 +596,26 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       } else if (wmForLowSignal.current_topic) {
         activateByEntities([wmForLowSignal.current_topic], sessionId);
       }
+    } else if (!wmForLowSignal || wmForLowSignal.message_count <= 2) {
+      // V10: Session-Start Bridge Activation — frueher in der Session, Bridge-Entities nutzen
+      try {
+        const bridgeRow = getDb().prepare("SELECT value FROM system_state WHERE key = 'session_bridge'")
+          .get() as { value: string } | undefined;
+        if (bridgeRow) {
+          const bridge = JSON.parse(bridgeRow.value) as { top_entities: Array<{ name: string; score: number }>; timestamp: number };
+          const ageH = (Date.now() - bridge.timestamp) / (1000 * 60 * 60);
+          if (ageH < 24 && bridge.top_entities.length > 0) {
+            const bridgeNames = bridge.top_entities
+              .filter(e => e.name.length > 2)
+              .slice(0, 5)
+              .map(e => e.name);
+            if (bridgeNames.length > 0) {
+              startNewCoherenceRound(sessionId);
+              activateByEntities(bridgeNames, sessionId);
+            }
+          }
+        }
+      } catch { /* non-fatal */ }
     }
   }
 

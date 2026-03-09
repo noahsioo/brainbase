@@ -181,10 +181,27 @@ function getLastSessionSummary(): string | null {
     const minutes = Math.round(duration / 60000);
     parts.push(`Letzte Session: ${lastSession.message_count} Nachrichten, ${minutes} Min.`);
 
-    // V6-5: Use WM summary if available (contains topic history + open questions)
-    if (lastSession.summary) {
+    // V12: Bridge-Entities als Themen-Quelle (sauberer als WM-Fragmente)
+    try {
+      const bridgeRow = db.prepare(
+        "SELECT value FROM system_state WHERE key = 'session_bridge'"
+      ).get() as { value: string } | undefined;
+      if (bridgeRow) {
+        const bridge = JSON.parse(bridgeRow.value) as { top_entities?: Array<{ name: string; score: number }> };
+        const realEntities = (bridge.top_entities || [])
+          .filter((e: { name: string }) => e.name.length > 3 && !isGarbageWord(e.name))
+          .slice(0, 5)
+          .map((e: { name: string }) => e.name);
+        if (realEntities.length > 0) {
+          parts.push(`Themen: ${realEntities.join(', ')}`);
+        }
+      }
+    } catch { /* non-fatal */ }
+
+    // V6-5: Use WM summary if available — V12: skip if garbage
+    if (lastSession.summary && !isGarbageSummary(lastSession.summary)) {
       parts.push(lastSession.summary);
-    } else {
+    } else if (!lastSession.summary) {
       // Fallback: Topics + last message
       try {
         const topics = JSON.parse(lastSession.topics) as string[];
@@ -243,4 +260,31 @@ function formatUpcoming(match: ProspectiveMatch): string {
   } catch {
     return `- ${match.node.content}`;
   }
+}
+
+// V12: Garbage-Erkennung fuer WM-Summaries
+const SESSION_GARBAGE_WORDS = new Set([
+  'weiter', 'haben', 'alles', 'gerade', 'arbeite', 'machen',
+  'zweitens', 'drittens', 'voll', 'komisch', 'dumm', 'echt',
+  'eigentlich', 'halt', 'eben', 'noch', 'andere', 'anderen',
+  'bisschen', 'wirklich', 'komplett', 'perfekt', 'nochmal',
+  'stimmt', 'genau', 'okay', 'super', 'cool', 'nice',
+  'sachen', 'dingen', 'sache', 'ding', 'dritte', 'erste',
+  'checken', 'testen', 'schauen', 'gucken', 'zeigen',
+  'woran', 'arbeiten', 'mache', 'mach', 'klar', 'schon',
+]);
+
+function isGarbageWord(word: string): boolean {
+  return SESSION_GARBAGE_WORDS.has(word.toLowerCase().trim());
+}
+
+function isGarbageSummary(summary: string): boolean {
+  const firstLine = summary.split('\n')[0] || '';
+  const themaMatch = firstLine.match(/^Thema:\s*(.+?)\.?\s*$/i);
+  if (!themaMatch) return false;
+  const topic = themaMatch[1];
+  const words = topic.toLowerCase().split(/[\s,.]+/).filter(w => w.length > 1);
+  if (words.length === 0) return true;
+  const garbageCount = words.filter(w => SESSION_GARBAGE_WORDS.has(w)).length;
+  return garbageCount / words.length > 0.6;
 }

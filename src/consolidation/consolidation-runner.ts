@@ -559,7 +559,7 @@ export async function runLightConsolidation(): Promise<{ nodes_pruned: number; n
   // 2. Single-mention nodes without confirmation older than 5 days
   const singleMention = db.prepare(`
     SELECT id FROM nodes
-    WHERE evidence_count <= 1
+    WHERE (metadata IS NULL OR json_extract(metadata, '$.evidence_count') IS NULL OR json_extract(metadata, '$.evidence_count') <= 1)
     AND created_at < ?
     AND type NOT IN ('entity', 'identity', 'core', 'example')
     AND importance < 0.7
