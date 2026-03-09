@@ -606,7 +606,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
         activateByEntities([wmForLowSignal.current_topic], sessionId);
       }
     } else if (!wmForLowSignal || wmForLowSignal.message_count <= 2) {
-      // V10: Session-Start Bridge Activation — frueher in der Session, Bridge-Entities nutzen
+      // V14: Softer Bridge Activation — prime but don't dominate
       try {
         const bridgeRow = getDb().prepare("SELECT value FROM system_state WHERE key = 'session_bridge'")
           .get() as { value: string } | undefined;
@@ -616,10 +616,11 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
           if (ageH < 24 && bridge.top_entities.length > 0) {
             const bridgeNames = bridge.top_entities
               .filter(e => e.name.length > 2)
-              .slice(0, 5)
+              .slice(0, 3)
               .map(e => e.name);
             if (bridgeNames.length > 0) {
               startNewCoherenceRound(sessionId);
+              primeActivations(0.1, sessionId);
               activateByEntities(bridgeNames, sessionId);
             }
           }

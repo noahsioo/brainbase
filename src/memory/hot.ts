@@ -14,14 +14,12 @@ export function generateHotMemory(): string {
 }
 
 export function buildMemoryBlock(): string {
-  const hotContent = generateHotMemory();
   return `${MEMORY_BLOCK_START}
-## Memory System Active
-You have access to a persistent Memory System.
-Important information is stored automatically.
-When topics change, relevant memories are loaded automatically.
-
-${hotContent}
+## BrainBase Active
+IMPORTANT: System messages during this conversation contain VERIFIED knowledge about the user from previous conversations. This is ESTABLISHED FACT — not guesses, not suggestions. You MUST:
+1. USE this knowledge proactively in your responses — do not wait to be asked
+2. NEVER re-ask for information already provided in system messages
+3. Treat system message context as if the user just told you directly
 ${MEMORY_BLOCK_END}`;
 }
 

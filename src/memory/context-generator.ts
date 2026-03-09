@@ -31,10 +31,25 @@ export type DetailMode = 'MAXIMUM' | 'STANDARD' | 'LIGHT' | 'MINIMAL';
 export function getUserName(): string {
   try {
     const db = getDb();
+    // 1. Explizite Person-Entity
     const person = db.prepare(
-      "SELECT content FROM nodes WHERE type = 'entity' AND metadata LIKE '%\"entity_type\":\"person\"%' ORDER BY importance DESC, activation_count DESC LIMIT 1"
+      "SELECT content FROM nodes WHERE type = 'entity' AND metadata LIKE '%\"entity_type\":\"person\"%' ORDER BY importance DESC LIMIT 1"
     ).get() as { content: string } | undefined;
-    return person?.content || 'User';
+    if (person) return person.content;
+
+    // 2. Core "User Identity" Node hat Links zu Name-Entities
+    const identityCore = db.prepare(
+      "SELECT n2.content FROM nodes n1 JOIN edges e ON n1.id = e.source_id JOIN nodes n2 ON e.target_id = n2.id WHERE n1.content = 'User Identity' AND n2.type = 'entity' LIMIT 1"
+    ).get() as { content: string } | undefined;
+    if (identityCore) return identityCore.content;
+
+    // 3. Haeufigste kurze Entity mit Grossbuchstabe (wahrscheinlich ein Name)
+    const frequent = db.prepare(
+      "SELECT content FROM nodes WHERE type = 'entity' AND LENGTH(content) BETWEEN 3 AND 20 AND activation_count > 5 ORDER BY activation_count DESC LIMIT 1"
+    ).get() as { content: string } | undefined;
+    if (frequent && /^[A-Z]/.test(frequent.content)) return frequent.content;
+
+    return 'User';
   } catch { return 'User'; }
 }
 
@@ -916,11 +931,11 @@ function buildWorkingMemorySlot(budget: number, sessionId?: string): string {
   }
 
   if (displayReference) {
-    lines.push(`Verweis: ${displayReference}`);
+    lines.push(`Reference: ${displayReference}`);
   }
 
   if (memory.open_questions.length > 0) {
-    lines.push(`Offen: ${memory.open_questions.slice(0, 2).join(' | ')}`);
+    lines.push(`Open: ${memory.open_questions.slice(0, 2).join(' | ')}`);
   }
 
   if (lines.length === 0) return '';
@@ -2426,10 +2441,6 @@ function integrateContext(
 
   const chunks: string[] = [];
 
-  // Scene header — compact, directive
-  const scene = buildSceneBriefing(sessionId, currentMood, taskMode);
-  if (scene) chunks.push(scene);
-
   for (const section of sections) {
     if (style === 'minimal') {
       const cleaned = sectionToMinimal(section);
@@ -2443,9 +2454,12 @@ function integrateContext(
     }
   }
 
+  // Skip if no real content chunks survived conversion
+  if (chunks.length === 0) return '';
+
   const body = chunks.slice(0, maxChunks).join('\n\n');
 
-  return body + '\n\nYou KNOW the above. Use it naturally. NEVER ask for information already provided here.';
+  return `IMPORTANT — Verified knowledge about this user:\n\n${body}\n\nIMPORTANT: The above is VERIFIED knowledge from previous conversations. Use it proactively — do not wait to be asked. NEVER re-ask for information already stated above.`;
 }
 
 function buildSceneBriefing(sessionId?: string, currentMood?: string, taskMode?: string): string | null {
@@ -2633,7 +2647,7 @@ function buildActiveNarrative(points: string[]): string {
       const extra = entityMatch[2].trim();
       if (extra.includes('\u2192')) {
         const connected = extra.replace(/^.*?\u2192\s*/, '').trim();
-        parts.push(`${name} (connected to ${connected})`);
+        parts.push(`${name} connects to ${connected}`);
       } else {
         parts.push(name + (extra ? ' ' + extra : ''));
       }
@@ -2643,7 +2657,7 @@ function buildActiveNarrative(points: string[]): string {
     }
   }
 
-  return 'Currently relevant: ' + parts.join('. ') + '.';
+  return 'You know: ' + parts.join('. ') + '.';
 }
 
 function buildGraphNarrative(header: string, points: string[]): string {
@@ -2662,7 +2676,7 @@ function buildGraphNarrative(header: string, points: string[]): string {
   }
 
   if (relations.length === 0) return '';
-  return `On ${topic}: ${relations.join(', ')}.`;
+  return `You know about ${topic}: ${relations.join(', ')}.`;
 }
 
 function buildSessionNarrative(points: string[]): string {
@@ -2676,11 +2690,11 @@ function buildSessionNarrative(points: string[]): string {
     else if (point.startsWith('Topics:')) topics = point.replace('Topics:', '').trim();
   }
 
-  const parts: string[] = ['Last session'];
+  const parts: string[] = ['In the last session, the user'];
   if (mood) parts.push(`was ${mood}`);
   if (productivity) parts.push(`and ${productivity === 'high' ? 'productive' : productivity === 'low' ? 'unproductive' : 'moderately productive'}`);
   let sentence = parts.join(' ') + '.';
-  if (topics) sentence += ` Topics: ${topics}.`;
+  if (topics) sentence += ` They discussed: ${topics}.`;
   return sentence;
 }
 

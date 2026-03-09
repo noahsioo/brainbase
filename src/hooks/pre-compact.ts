@@ -34,64 +34,64 @@ export async function handlePreCompact(input: PreCompactInput = {}): Promise<voi
       } catch { /* no focus data */ }
     }
 
-    let briefing = '[Memory System — Post-Compact Reconnect]\n\n';
     if (!sessionId) {
-      briefing += 'Kein session-spezifischer Reconnect-State verfuegbar.\n';
-      const output = JSON.stringify({ systemMessage: briefing });
+      const output = JSON.stringify({ systemMessage: 'IMPORTANT — Conversation was compressed. No session-specific state available.' });
       process.stdout.write(output);
       return;
     }
 
-    if (runtimeState.mood && runtimeState.mood !== 'neutral') {
-      briefing += `Mood: ${runtimeState.mood}\n`;
-    }
-    if (runtimeState.taskMode) {
-      briefing += `Mode: ${runtimeState.taskMode}\n`;
-    }
-    if (runtimeState.empathyMode && runtimeState.empathyMode !== 'neutral') {
-      briefing += `Empathy: ${runtimeState.empathyMode}\n`;
-    }
+    const parts: string[] = ['IMPORTANT — Conversation was compressed. Here is what you were discussing:'];
+
+    // Build narrative reconnect state
+    const stateParts: string[] = [];
     if (workingMemory?.current_topic) {
-      briefing += `Topic: ${workingMemory.current_topic}\n`;
+      stateParts.push(`topic: ${workingMemory.current_topic}`);
     }
     if (focusEntities.length > 0) {
-      briefing += `Focus: ${focusEntities.join(', ')}\n`;
+      stateParts.push(`focus: ${focusEntities.join(', ')}`);
     }
-    if (workingMemory?.references && workingMemory.references.length > 0) {
-      const displayReference = workingMemory.references.find(reference => {
-        const normalized = reference.trim().toLowerCase();
-        return normalized && !['das', 'dies', 'diese', 'dieser', 'dieses', 'es', 'it', 'this', 'that'].includes(normalized);
-      });
-      if (displayReference) {
-        briefing += `Reference: ${displayReference}\n`;
-      }
+    if (runtimeState.mood && runtimeState.mood !== 'neutral') {
+      stateParts.push(`user mood: ${runtimeState.mood}`);
     }
-    if (workingMemory?.context_stack && workingMemory.context_stack.length > 0) {
-      briefing += `Context: ${workingMemory.context_stack.slice(0, 4).join(' -> ')}\n`;
+    if (runtimeState.taskMode) {
+      stateParts.push(`mode: ${runtimeState.taskMode}`);
+    }
+    if (stateParts.length > 0) {
+      parts.push(`Current state: ${stateParts.join(', ')}.`);
+    }
+
+    if (workingMemory?.conversation_summary) {
+      parts.push(`Session so far: ${workingMemory.conversation_summary}`);
     }
     if (workingMemory?.open_questions && workingMemory.open_questions.length > 0) {
-      briefing += `Open loops: ${workingMemory.open_questions.slice(0, 3).join(' | ')}\n`;
+      parts.push(`Open questions: ${workingMemory.open_questions.slice(0, 3).join(' | ')}`);
     }
     if (workingMemory?.last_user_message) {
-      briefing += `Last user input: ${workingMemory.last_user_message}\n`;
-    }
-    if (workingMemory?.conversation_summary) {
-      briefing += `\nSession core:\n- ${workingMemory.conversation_summary}\n`;
+      parts.push(`Last user message: ${workingMemory.last_user_message}`);
     }
     if (topActivated.length > 0) {
-      briefing += '\nActive in memory:\n';
-      for (const node of topActivated) {
-        briefing += `- ${node.content} (${node.type})\n`;
+      const activeKnowledge = topActivated
+        .filter(n => n.type !== 'entity' && n.type !== 'core')
+        .map(n => n.content);
+      const activeEntities = topActivated
+        .filter(n => n.type === 'entity')
+        .map(n => n.content);
+      if (activeEntities.length > 0) {
+        parts.push(`Key entities: ${activeEntities.join(', ')}`);
+      }
+      if (activeKnowledge.length > 0) {
+        parts.push(`You know: ${activeKnowledge.join('. ')}`);
       }
     }
-    if (!workingMemory && focusEntities.length === 0 && topActivated.length === 0) {
-      briefing += '\nLocal reconnect state is thin. Continue using the current session ID so the system reconnects to the same focus.\n';
-    }
+
+    parts.push('\nContinue the conversation naturally. Use the above context — NEVER re-ask for it.');
+
+    const briefing = parts.join('\n');
 
     const output = JSON.stringify({ systemMessage: briefing });
     process.stdout.write(output);
   } catch {
-    const fallback = JSON.stringify({ systemMessage: '[Memory System Active]' });
+    const fallback = JSON.stringify({ systemMessage: 'IMPORTANT — Conversation was compressed. Continue naturally.' });
     process.stdout.write(fallback);
   }
 }

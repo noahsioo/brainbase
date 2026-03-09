@@ -1,8 +1,8 @@
-import { createSession, getDb, findEntityByName, type Node } from '../memory/store.js';
+import { createSession, getDb, findEntityByName } from '../memory/store.js';
 import { getUserName } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
 import { clearSessionActivationOverlay, activateNode } from '../memory/activation.js';
-import { incrementSessionCount, isCriticalPeriod, getDevelopmentPhase } from '../memory/cold-start.js';
+import { incrementSessionCount, isCriticalPeriod } from '../memory/cold-start.js';
 import { getConfig } from '../config.js';
 import { buildPrediction, savePrediction } from '../signal/prediction.js';
 import { startNewSessionTrend } from '../regulation/allostasis.js';
@@ -65,11 +65,13 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
       }).catch(() => {});
     }
 
-    // Priming: load last session summary + use STANDARD mode at session start
+    // Role-Injection: gezielte DB-Queries statt generischer Context-Dump
     const lastSummary = getLastSessionSummary();
-    const context = generateContext('STANDARD', undefined, undefined, undefined, undefined, undefined, undefined, sessionId);
+    const userName = getUserName();
+    const identityFacts = getIdentityFacts();
+    const topKnowledge = getTopKnowledge();
 
-    // V6-4: Morgen-Check — faellige Reminders bei Session-Start
+    // Morgen-Check — faellige Reminders bei Session-Start
     let dueReminders: ReturnType<typeof checkProspectiveTriggers> = [];
     let upcomingReminders: ProspectiveMatch[] = [];
     try {
@@ -78,26 +80,48 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     } catch { /* non-fatal */ }
 
     let systemMessage: string;
-    if (context && context !== 'No memories stored yet. The system learns automatically from sessions.') {
-      const devPhase = getDevelopmentPhase();
-      const phaseLabel: Record<string, string> = {
-        infant: 'Learning', child: 'Growth', teen: 'Specialization', adult: 'Stable', wise: 'Experienced',
-      };
-      systemMessage = `[Memory System Active - Session #${sessionCount} (${phaseLabel[devPhase.phase]})]\n\n`;
+    const hasMemories = identityFacts.length > 0 || topKnowledge.length > 0 || lastSummary;
+
+    if (hasMemories) {
+      const parts: string[] = [];
+
+      // IMPORTANT header — triggers CLAUDE.md authority primer
+      parts.push('IMPORTANT — Verified knowledge about this user from previous conversations:\n');
+
+      // Identity line — kurz, direktiv
+      if (identityFacts.length > 0) {
+        parts.push(`You are working with ${userName} (${identityFacts.join(', ')}).`);
+      } else {
+        parts.push(`You are working with ${userName}.`);
+      }
+
+      // Top Knowledge — max 5 wichtigste Facts/Preferences/Workflows
+      if (topKnowledge.length > 0) {
+        parts.push('You KNOW:');
+        for (const fact of topKnowledge) {
+          parts.push(`- ${fact}`);
+        }
+      }
+
+      // Letzte Session
       if (lastSummary) {
-        systemMessage += `## Last Status\n${lastSummary}\n\n`;
+        parts.push(`\nLAST SESSION:\n${lastSummary}`);
       }
+
+      // Prediction
       if (prediction) {
-        systemMessage += `## Prediction\nProbable topic: ${prediction.expected_topic} (${Math.round(prediction.confidence * 100)}%)\n\n`;
+        parts.push(`\nProbable topic: ${prediction.expected_topic} (${Math.round(prediction.confidence * 100)}%)`);
       }
-      // V13: Due Reminders — proactive format
+
+      // Due Reminders — proaktiv
       if (dueReminders.length > 0) {
         const reminderBlock = dueReminders
           .map(m => `- ${formatProactiveReminder(m.node)}`)
           .join('\n');
-        systemMessage += `## ACTION REQUIRED\n${reminderBlock}\n\n`;
+        parts.push(`\nACTION REQUIRED:\n${reminderBlock}`);
       }
-      // V13: Upcoming Reminders — scored with low threshold (0.15 = briefing mode)
+
+      // Upcoming Reminders — scored
       if (upcomingReminders.length > 0) {
         const predictedTopic = prediction?.expected_topic;
         const scoredUpcoming = upcomingReminders
@@ -112,10 +136,11 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
           const upcomingBlock = scoredUpcoming
             .map(s => formatUpcoming(s.match))
             .join('\n');
-          systemMessage += `## Due Soon\n${upcomingBlock}\n\n`;
+          parts.push(`\nDue soon:\n${upcomingBlock}`);
         }
       }
-      // V13: Life Events — scored with threshold 0.15 (session start = more open)
+
+      // Life Events
       try {
         const lifeEvents = getActiveLifeEvents();
         if (lifeEvents.length > 0) {
@@ -126,24 +151,73 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
             const leBlock = relevantLE
               .map(le => `- ${le.content}`)
               .join('\n');
-            systemMessage += `## Current Life Phase\n${leBlock}\n\n`;
+            parts.push(`\nCurrent life phase:\n${leBlock}`);
           }
         }
       } catch { /* non-fatal */ }
 
-      systemMessage += context;
+      // Direktive Footer
+      parts.push('\nIMPORTANT: The above is VERIFIED. Use it proactively. NEVER re-ask for information already stated above.');
+
+      systemMessage = parts.join('\n');
     } else {
-      systemMessage = '[Memory System Active] No memories yet. System learns automatically.';
+      systemMessage = 'BrainBase active. No memories yet — system learns automatically from conversations.';
     }
 
     const output = JSON.stringify({ systemMessage });
     process.stdout.write(output);
   } catch (err) {
     const fallback = JSON.stringify({
-      systemMessage: '[Memory System Active] System started.',
+      systemMessage: 'BrainBase active.',
     });
     process.stdout.write(fallback);
   }
+}
+
+function getIdentityFacts(): string[] {
+  try {
+    const db = getDb();
+
+    // 1. Echte identity Nodes
+    const identityNodes = db.prepare(
+      "SELECT content FROM nodes WHERE type = 'identity' AND LENGTH(content) BETWEEN 10 AND 100 ORDER BY importance DESC LIMIT 3"
+    ).all() as Array<{ content: string }>;
+    if (identityNodes.length > 0) return identityNodes.map(n => n.content);
+
+    // 2. Fallback: Core-linked Entities (User Identity, Current Project, Tech Stack)
+    const coreLinked = db.prepare(`
+      SELECT DISTINCT n2.content FROM nodes n1
+      JOIN edges e ON n1.id = e.source_id
+      JOIN nodes n2 ON e.target_id = n2.id
+      WHERE n1.type = 'core' AND n1.content IN ('User Identity', 'Current Project', 'Tech Stack')
+      AND n2.type = 'entity' AND LENGTH(n2.content) BETWEEN 3 AND 50
+      ORDER BY n2.importance DESC LIMIT 5
+    `).all() as Array<{ content: string }>;
+    return coreLinked.map(n => n.content).filter(c => !SESSION_GARBAGE_WORDS.has(c.toLowerCase()));
+  } catch { return []; }
+}
+
+function getTopKnowledge(): string[] {
+  try {
+    const db = getDb();
+    const nodes = db.prepare(
+      "SELECT content FROM nodes WHERE type IN ('fact', 'preference', 'workflow', 'process', 'decision') AND LENGTH(content) BETWEEN 20 AND 200 ORDER BY importance DESC, activation_count DESC LIMIT 10"
+    ).all() as Array<{ content: string }>;
+
+    return nodes
+      .filter(n => isCleanFact(n.content))
+      .slice(0, 5)
+      .map(n => n.content.length > 120 ? n.content.substring(0, 117) + '...' : n.content);
+  } catch { return []; }
+}
+
+function isCleanFact(content: string): boolean {
+  if (content.includes('\u2192') || content.includes('|')) return false;
+  if (content.includes('erkennt') && content.includes('als Entity')) return false;
+  const words = content.split(/\s+/).filter(w => w.length > 2);
+  if (words.length < 3) return false;
+  if (content.startsWith('->') || content.startsWith('//')) return false;
+  return true;
 }
 
 function loadSessionBridge(sessionId: string): void {
@@ -164,14 +238,20 @@ function loadSessionBridge(sessionId: string): void {
     const ageHours = (Date.now() - bridge.timestamp) / (1000 * 60 * 60);
     if (ageHours > 24) return;
 
-    // V10: Staerkere Bridge-Activation fuer besseren Cross-Session Context
-    const energyScale = ageHours < 2 ? 0.8 : ageHours < 8 ? 0.5 : 0.25;
+    // V15: Bei parallelen Sessions Bridge NICHT laden (Cross-Chat Bleeding)
+    const activeSessions = db.prepare(
+      "SELECT COUNT(*) as cnt FROM sessions WHERE ended_at IS NULL AND id != ?"
+    ).get(sessionId) as { cnt: number };
+    if (activeSessions.cnt > 0) return;
+
+    // V14: Softer Bridge — entities are available but don't dominate new session
+    const energyScale = ageHours < 2 ? 0.3 : ageHours < 8 ? 0.15 : 0.08;
 
     for (const entity of bridge.top_entities) {
       const entityNode = findEntityByName(entity.name);
       if (entityNode) {
-        // Mindestens 0.2 Activation damit Context Generator die Nodes findet
-        const energy = Math.max(0.2, entity.score * energyScale);
+        // Low activation — available for retrieval if topic matches, but won't dominate
+        const energy = Math.max(0.1, entity.score * energyScale);
         activateNode(entityNode.id, energy, sessionId);
       }
     }
@@ -215,9 +295,20 @@ function getLastSessionSummary(): string | null {
       }
     } catch { /* non-fatal */ }
 
-    // V6-5: Use WM summary if available — V12: skip if garbage
+    // V6-5: Use WM summary if available — V12/V15: skip garbage, filter lines
     if (lastSession.summary && !isGarbageSummary(lastSession.summary)) {
-      parts.push(lastSession.summary);
+      const cleanedSummary = lastSession.summary
+        .split('\n')
+        .filter(line => {
+          if (line.startsWith('Focus:') || line.startsWith('Fokus:')) {
+            const entities = line.replace(/^(?:Focus|Fokus):/, '').split(',').map(s => s.trim());
+            const real = entities.filter(e => !isGarbageWord(e) && e.length > 3);
+            return real.length > 0;
+          }
+          return true;
+        })
+        .join('\n');
+      if (cleanedSummary.trim()) parts.push(cleanedSummary);
     } else if (!lastSession.summary) {
       // Fallback: Topics + last message
       try {

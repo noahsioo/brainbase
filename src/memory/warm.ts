@@ -48,14 +48,27 @@ function getWarmMemoriesSync(topic: string, limit: number, sessionId?: string): 
 export function buildWarmMemoryBlock(topic: string, nodes: Node[]): string {
   if (nodes.length === 0) return '';
 
-  let block = `[Memory System - Topic: ${topic}]\n`;
-  block += `Relevant nodes for this topic:\n\n`;
+  const entityNodes = nodes.filter(n => n.type === 'entity');
+  const knowledgeNodes = nodes.filter(n => n.type !== 'entity' && n.type !== 'core');
 
-  for (const n of nodes) {
-    block += `- [${n.type}] ${n.content}\n`;
+  const parts: string[] = [];
+
+  if (entityNodes.length > 0) {
+    parts.push(`Key concepts for ${topic}: ${entityNodes.map(n => n.content).join(', ')}.`);
   }
 
-  return block;
+  for (const n of knowledgeNodes) {
+    // Skip overly long episode blocks — summarize instead
+    if (n.type === 'episode' && n.content.length > 200) {
+      parts.push(n.content.substring(0, 197) + '...');
+    } else {
+      parts.push(n.content);
+    }
+  }
+
+  if (parts.length === 0) return '';
+
+  return `You know about ${topic}:\n${parts.map(p => `- ${p}`).join('\n')}\n`;
 }
 
 export function getWarmMemoryForTopic(topic: string, sessionId?: string): string {
