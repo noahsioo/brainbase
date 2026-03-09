@@ -34,7 +34,8 @@ export interface NodeMetadata {
   hub_edge_count?: number;
   // V6: Prospective Memory
   trigger_date?: number;
-  trigger_type?: 'time' | 'event' | 'both';
+  trigger_type?: 'time' | 'event' | 'both' | 'recurring';
+  recurring?: boolean;
   dismissed?: boolean;
 }
 

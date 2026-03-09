@@ -10,7 +10,7 @@ import { getScope } from '../memory/session-scope.js';
 import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { initWorkingMemory } from '../memory/working-memory.js';
-import { checkProspectiveTriggers } from '../memory/prospective.js';
+import { checkProspectiveTriggers, getUpcomingReminders, type ProspectiveMatch } from '../memory/prospective.js';
 import { getOpenTasks } from '../watcher/task-watcher.js';
 
 interface SessionStartInput {
@@ -71,8 +71,10 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
 
     // V6-4: Morgen-Check — faellige Reminders bei Session-Start
     let dueReminders: ReturnType<typeof checkProspectiveTriggers> = [];
+    let upcomingReminders: ProspectiveMatch[] = [];
     try {
       dueReminders = checkProspectiveTriggers('');
+      upcomingReminders = getUpcomingReminders(24);
     } catch { /* non-fatal */ }
 
     let systemMessage: string;
@@ -94,6 +96,12 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
           .map(m => `- ${m.node.content}`)
           .join('\n');
         systemMessage += `## Erinnerungen\n${reminderBlock}\n\n`;
+      }
+      if (upcomingReminders.length > 0) {
+        const upcomingBlock = upcomingReminders
+          .map(m => formatUpcoming(m))
+          .join('\n');
+        systemMessage += `## Bald faellig\n${upcomingBlock}\n\n`;
       }
       systemMessage += context;
     } else {
@@ -194,5 +202,27 @@ function getLastSessionSummary(): string | null {
     return parts.join('\n');
   } catch {
     return null;
+  }
+}
+
+// V10-5: Upcoming Reminders formatieren mit Zeitangabe
+function formatUpcoming(match: ProspectiveMatch): string {
+  try {
+    const meta = JSON.parse(match.node.metadata || '{}') as Record<string, unknown>;
+    const date = new Date(meta.trigger_date as number);
+    const now = new Date();
+    const diffH = Math.round((date.getTime() - now.getTime()) / (60 * 60 * 1000));
+
+    let timeLabel: string;
+    if (diffH <= 1) timeLabel = 'In ~1 Stunde';
+    else if (diffH < 24) timeLabel = `In ~${diffH} Stunden`;
+    else {
+      const dayStr = date.toLocaleDateString('de-DE', { weekday: 'long' });
+      timeLabel = dayStr;
+    }
+
+    return `- ${timeLabel}: ${match.node.content}`;
+  } catch {
+    return `- ${match.node.content}`;
   }
 }

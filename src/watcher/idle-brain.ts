@@ -5,6 +5,7 @@ import { detectHungerZones } from '../memory/knowledge-hunger.js';
 import { updateSelfModel } from '../meta/self-model.js';
 import { defaultModePass } from '../consolidation/consolidation-runner.js';
 import { calculateSystemMood } from '../senses/interoception.js';
+import { getUpcomingReminders } from '../memory/prospective.js';
 
 export interface IdleResult {
   health_updated: boolean;
@@ -13,13 +14,14 @@ export interface IdleResult {
   dmn_connections: number;
   decay_applied: number;
   pre_warmed: number;
+  upcoming_reminders: number;
 }
 
 export function runIdleTick(): IdleResult {
   const result: IdleResult = {
     health_updated: false, hunger_checked: false,
     self_model_updated: false, dmn_connections: 0, decay_applied: 0,
-    pre_warmed: 0,
+    pre_warmed: 0, upcoming_reminders: 0,
   };
 
   const db = getDb();
@@ -61,6 +63,20 @@ export function runIdleTick(): IdleResult {
   // 5. Pre-Warm Context — Session-relevante Nodes vorwaermen
   try {
     result.pre_warmed = preWarmContext();
+  } catch { /* non-fatal */ }
+
+  // 6. V10-3: Prospective Memory — upcoming Reminders vorwaermen
+  try {
+    const upcoming = getUpcomingReminders(6);
+    for (const match of upcoming) {
+      for (const sessionId of getActiveSessionIds()) {
+        const current = getSessionActivationValue(match.node.id, sessionId);
+        if (current < 0.1) {
+          setSessionActivationValue(match.node.id, sessionId, 0.1);
+        }
+      }
+    }
+    result.upcoming_reminders = upcoming.length;
   } catch { /* non-fatal */ }
 
   return result;

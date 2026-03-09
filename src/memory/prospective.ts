@@ -14,7 +14,7 @@ export function createProspectiveMemory(
     importance?: number;
     source?: string;
     trigger_date?: number;
-    trigger_type?: 'time' | 'event' | 'both';
+    trigger_type?: 'time' | 'event' | 'both' | 'recurring';
   },
 ): Node {
   const trigger = triggerWords.map(w => w.toLowerCase()).join(',');
@@ -23,6 +23,9 @@ export function createProspectiveMemory(
   if (opts?.trigger_date) {
     metadata.trigger_date = opts.trigger_date;
     metadata.trigger_type = opts.trigger_type || 'time';
+    if (opts.trigger_type === 'recurring') {
+      metadata.recurring = true;
+    }
   }
 
   const node = addNode(content, 'prospective', {
@@ -34,6 +37,82 @@ export function createProspectiveMemory(
 
   autoLinkNodes(node.id);
   return node;
+}
+
+// V10-2: Naechstes Vorkommen fuer recurring Reminders berechnen
+function calculateNextRecurrence(node: Node, meta: Record<string, unknown>): number | null {
+  const triggerStr = node.emotional_tag?.replace('trigger:', '') || '';
+  const content = node.content.toLowerCase();
+
+  const WEEKDAY_MAP: Record<string, number> = {
+    montag: 1, dienstag: 2, mittwoch: 3, donnerstag: 4,
+    freitag: 5, samstag: 6, sonntag: 0,
+    monday: 1, tuesday: 2, wednesday: 3, thursday: 4,
+    friday: 5, saturday: 6, sunday: 0,
+  };
+
+  for (const [name, day] of Object.entries(WEEKDAY_MAP)) {
+    if (content.includes(name) || triggerStr.includes(name)) {
+      const now = new Date();
+      const current = now.getDay();
+      let daysUntil = (day - current + 7) % 7;
+      if (daysUntil === 0) daysUntil = 7;
+      const next = new Date(now);
+      next.setDate(next.getDate() + daysUntil);
+      next.setHours(9, 0, 0, 0);
+      return next.getTime();
+    }
+  }
+
+  if (/t[aä]glich|daily/.test(content)) {
+    const next = new Date();
+    next.setDate(next.getDate() + 1);
+    next.setHours(9, 0, 0, 0);
+    return next.getTime();
+  }
+
+  if (/w[oö]chentlich|weekly/.test(content)) {
+    const next = new Date();
+    next.setDate(next.getDate() + 7);
+    next.setHours(9, 0, 0, 0);
+    return next.getTime();
+  }
+
+  return null;
+}
+
+// V10-1: Upcoming Reminders — noch nicht faellig, aber bald
+export function getUpcomingReminders(hoursAhead = 24): ProspectiveMatch[] {
+  const db = getDb();
+  const prospectiveNodes = db.prepare(
+    "SELECT * FROM nodes WHERE type = 'prospective'"
+  ).all() as Node[];
+
+  if (prospectiveNodes.length === 0) return [];
+
+  const now = Date.now();
+  const horizon = now + hoursAhead * 60 * 60 * 1000;
+  const matches: ProspectiveMatch[] = [];
+
+  for (const node of prospectiveNodes) {
+    if (!node.metadata) continue;
+    try {
+      const meta = JSON.parse(node.metadata) as Record<string, unknown>;
+      if (meta.dismissed) continue;
+      if (!meta.trigger_date) continue;
+      const triggerDate = meta.trigger_date as number;
+
+      if (triggerDate > now && triggerDate <= horizon) {
+        const hoursUntil = Math.round((triggerDate - now) / (60 * 60 * 1000));
+        matches.push({
+          node,
+          trigger: `in ~${hoursUntil}h`,
+        });
+      }
+    } catch { /* skip */ }
+  }
+
+  return matches;
 }
 
 export function checkProspectiveTriggers(message: string): ProspectiveMatch[] {
@@ -60,6 +139,16 @@ export function checkProspectiveTriggers(message: string): ProspectiveMatch[] {
           if (now >= (meta.trigger_date as number)) {
             matched = true;
             trigger = 'time';
+
+            // V10-2: Recurring → neues Datum berechnen statt dismiss
+            if (meta.trigger_type === 'recurring' || meta.recurring === true) {
+              const nextDate = calculateNextRecurrence(node, meta);
+              if (nextDate) {
+                meta.trigger_date = nextDate;
+                meta.last_fired = now;
+                updateNode(node.id, { metadata: JSON.stringify(meta) });
+              }
+            }
           }
         }
       } catch { /* skip */ }

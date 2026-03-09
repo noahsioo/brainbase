@@ -130,6 +130,15 @@ How entities connect: uses, likes, dislikes, builds, knows, part_of, works_with,
 - GOOD: { "from": "Lovis", "to": "TypeScript", "type": "uses" }
 - BAD: { "from": "User", "to": "system", "type": "related_to" }
 
+## RELATIONSHIP QUALITY
+Relationships are MORE VALUABLE than isolated entities.
+When user says "I use TypeScript for BrainBase":
+- Extract BOTH: Lovis → uses → TypeScript AND BrainBase → uses → TypeScript
+Multi-hop: "Lovis builds BrainBase with TypeScript" → 3 relations:
+  1. Lovis → builds → BrainBase
+  2. BrainBase → uses → TypeScript
+  3. Lovis → uses → TypeScript
+
 ## FACTS (RARELY needed — prefer entities+relations)
 Only use facts for these SPECIFIC cases:
 - A concrete PREFERENCE: "Bevorzugt X ueber Y" (type: preference)
@@ -467,6 +476,31 @@ export async function extractFromMessageDetailed(
     }
   }
 
+  // V9-8: Co-Mention Edge Strengthening — implizite Kanten zwischen co-extrahierten Entities
+  if (entityNodeMap.size >= 2) {
+    const entityEntries = Array.from(entityNodeMap.entries())
+      .filter(([, node]) => node.type === 'entity')
+      .slice(0, 5);
+
+    for (let i = 0; i < entityEntries.length; i++) {
+      for (let j = i + 1; j < entityEntries.length; j++) {
+        const [, nodeA] = entityEntries[i];
+        const [, nodeB] = entityEntries[j];
+        if (nodeA.id === nodeB.id) continue;
+
+        const existingEdge = getEdgeBetween(nodeA.id, nodeB.id);
+        if (existingEdge) {
+          strengthenEdge(existingEdge.id, 0.02);
+        } else {
+          addEdge(nodeA.id, nodeB.id, 'co_mentioned', 0.1, {
+            auto_generated: true,
+            source_session: sessionId,
+          });
+        }
+      }
+    }
+  }
+
   // ── Process Facts (legacy + complex info) ─────────────────
   if (response.nothing_new && (!response.entities || response.entities.length === 0)) {
     return { nodes: createdNodes, semantic };
@@ -564,7 +598,9 @@ export async function extractFromMessageDetailed(
           importance: 0.85,
           source: `llm:${sessionId}`,
           trigger_date: temporal?.date,
-          trigger_type: temporal ? (triggerWords.length > 0 ? 'both' : 'time') : 'event',
+          trigger_type: temporal?.type === 'recurring'
+            ? 'recurring'
+            : temporal ? (triggerWords.length > 0 ? 'both' : 'time') : 'event',
         });
         recordCreation();
         continue;

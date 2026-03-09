@@ -14,7 +14,7 @@ import { GATE_HEBBIAN, GATE_LLM } from '../signal/signal-strength.js';
 import { processThalamic, deriveSystemMode } from '../signal/thalamus.js';
 import { detectFeedbackSignal, detectMood, setCurrentMood, applyFeedbackToRecentNodes, applyFeedbackOutcome, applySomaticMarkers, applyContextFeedback, detectEmpathyMode, trackProviderFeedback } from '../signal/echo.js';
 import { updateHotMemoryInDb } from '../memory/hot.js';
-import { checkProspectiveTriggers } from '../memory/prospective.js';
+import { checkProspectiveTriggers, getUpcomingReminders } from '../memory/prospective.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { detectEmotionBypass } from '../senses/emotion-sense.js';
 import { getStability } from '../senses/stability-sense.js';
@@ -747,11 +747,26 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       if (match.trigger === 'time') {
         try {
           const meta = match.node.metadata ? JSON.parse(match.node.metadata) : {};
-          meta.dismissed = true;
-          updateNode(match.node.id, { metadata: JSON.stringify(meta) });
+          // V10-2: Recurring Nodes nicht dismissen — wurden in checkProspectiveTriggers erneuert
+          if (meta.trigger_type !== 'recurring' && !meta.recurring) {
+            meta.dismissed = true;
+            updateNode(match.node.id, { metadata: JSON.stringify(meta) });
+          }
         } catch { /* non-fatal */ }
       }
     }
+  } else {
+    // V10-1: Kein akuter Match — upcoming Reminders einblenden
+    try {
+      const upcoming = getUpcomingReminders(12);
+      if (upcoming.length > 0) {
+        const upcomingBlock = upcoming
+          .map(m => `- ${m.node.content} (${m.trigger})`)
+          .join('\n');
+        const upcomingSection = `\n## Bald faellig\n${upcomingBlock}\n`;
+        finalContext = finalContext ? finalContext + upcomingSection : upcomingSection;
+      }
+    } catch { /* non-fatal */ }
   }
 
   if (watcherSystemMessage && finalContext) {
