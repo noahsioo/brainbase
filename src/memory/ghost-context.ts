@@ -28,12 +28,12 @@ export function buildGhostContext(topic: string, expertiseOverride?: number): st
     : calculateExpertise(topic);
 
   if (level < 0.2) {
-    return `User hat wenig Erfahrung mit ${topic}. Erklaere Konzepte, nutze Analogien.`;
+    return `User has little experience with ${topic}. Explain concepts, use analogies.`;
   } else if (level < 0.5) {
-    return `User kennt Grundlagen von ${topic}. Keine Basics, aber Kontext geben.`;
+    return `User knows basics of ${topic}. No basics, but provide context.`;
   } else if (level < 0.8) {
-    return `User ist erfahren mit ${topic}. Direkt zum Punkt, Code bevorzugt.`;
+    return `User is experienced with ${topic}. Get to the point, code preferred.`;
   } else {
-    return `User ist Expert in ${topic}. Keine Erklaerungen, nur Loesungen.`;
+    return `User is an expert in ${topic}. No explanations, just solutions.`;
   }
 }

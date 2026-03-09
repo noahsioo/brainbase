@@ -10,7 +10,7 @@ import { getScope } from '../memory/session-scope.js';
 import { runConsolidation, getLastConsolidation } from '../consolidation/consolidation-runner.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { initWorkingMemory } from '../memory/working-memory.js';
-import { checkProspectiveTriggers, getUpcomingReminders, getActiveLifeEvents, type ProspectiveMatch } from '../memory/prospective.js';
+import { checkProspectiveTriggers, getUpcomingReminders, getActiveLifeEvents, scoreReminderRelevance, scoreLifeEventRelevance, formatProactiveReminder, type ProspectiveMatch } from '../memory/prospective.js';
 import { getOpenTasks } from '../watcher/task-watcher.js';
 
 interface SessionStartInput {
@@ -78,52 +78,69 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     } catch { /* non-fatal */ }
 
     let systemMessage: string;
-    if (context && context !== 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.') {
-      // 18.2: Phase label statt binary Learning Mode
+    if (context && context !== 'No memories stored yet. The system learns automatically from sessions.') {
       const devPhase = getDevelopmentPhase();
       const phaseLabel: Record<string, string> = {
-        infant: 'Lernmodus', child: 'Wachstumsphase', teen: 'Spezialisierung', adult: 'Stabil', wise: 'Erfahren',
+        infant: 'Learning', child: 'Growth', teen: 'Specialization', adult: 'Stable', wise: 'Experienced',
       };
       systemMessage = `[Memory System Active - Session #${sessionCount} (${phaseLabel[devPhase.phase]})]\n\n`;
       if (lastSummary) {
-        systemMessage += `## Letzter Stand\n${lastSummary}\n\n`;
+        systemMessage += `## Last Status\n${lastSummary}\n\n`;
       }
       if (prediction) {
-        systemMessage += `## Erwartung\nWahrscheinliches Thema: ${prediction.expected_topic} (${Math.round(prediction.confidence * 100)}%)\n\n`;
+        systemMessage += `## Prediction\nProbable topic: ${prediction.expected_topic} (${Math.round(prediction.confidence * 100)}%)\n\n`;
       }
+      // V13: Due Reminders — proactive format
       if (dueReminders.length > 0) {
         const reminderBlock = dueReminders
-          .map(m => `- ${m.node.content}`)
+          .map(m => `- ${formatProactiveReminder(m.node)}`)
           .join('\n');
-        systemMessage += `## Erinnerungen\n${reminderBlock}\n\n`;
+        systemMessage += `## ACTION REQUIRED\n${reminderBlock}\n\n`;
       }
+      // V13: Upcoming Reminders — scored with low threshold (0.15 = briefing mode)
       if (upcomingReminders.length > 0) {
-        const upcomingBlock = upcomingReminders
-          .map(m => formatUpcoming(m))
-          .join('\n');
-        systemMessage += `## Bald faellig\n${upcomingBlock}\n\n`;
+        const predictedTopic = prediction?.expected_topic;
+        const scoredUpcoming = upcomingReminders
+          .map(m => ({
+            match: m,
+            score: scoreReminderRelevance(m.node, predictedTopic),
+          }))
+          .filter(s => s.score >= 0.15)
+          .sort((a, b) => b.score - a.score);
+
+        if (scoredUpcoming.length > 0) {
+          const upcomingBlock = scoredUpcoming
+            .map(s => formatUpcoming(s.match))
+            .join('\n');
+          systemMessage += `## Due Soon\n${upcomingBlock}\n\n`;
+        }
       }
-      // V11-4: Aktive Life Events anzeigen
+      // V13: Life Events — scored with threshold 0.15 (session start = more open)
       try {
         const lifeEvents = getActiveLifeEvents();
         if (lifeEvents.length > 0) {
-          const leBlock = lifeEvents
-            .map(le => `- ${le.content}`)
-            .join('\n');
-          systemMessage += `## Aktuelle Lebensphase\n${leBlock}\n\n`;
+          const relevantLE = lifeEvents.filter(le =>
+            scoreLifeEventRelevance(le, prediction?.expected_topic) >= 0.15
+          );
+          if (relevantLE.length > 0) {
+            const leBlock = relevantLE
+              .map(le => `- ${le.content}`)
+              .join('\n');
+            systemMessage += `## Current Life Phase\n${leBlock}\n\n`;
+          }
         }
       } catch { /* non-fatal */ }
 
       systemMessage += context;
     } else {
-      systemMessage = '[Memory System Active] Noch keine Memories vorhanden. Das System lernt automatisch.';
+      systemMessage = '[Memory System Active] No memories yet. System learns automatically.';
     }
 
     const output = JSON.stringify({ systemMessage });
     process.stdout.write(output);
   } catch (err) {
     const fallback = JSON.stringify({
-      systemMessage: '[Memory System Active] System gestartet.',
+      systemMessage: '[Memory System Active] System started.',
     });
     process.stdout.write(fallback);
   }
@@ -179,7 +196,7 @@ function getLastSessionSummary(): string | null {
     // Session info
     const duration = lastSession.ended_at - lastSession.started_at;
     const minutes = Math.round(duration / 60000);
-    parts.push(`Letzte Session: ${lastSession.message_count} Nachrichten, ${minutes} Min.`);
+    parts.push(`Last session: ${lastSession.message_count} messages, ${minutes} min.`);
 
     // V12: Bridge-Entities als Themen-Quelle (sauberer als WM-Fragmente)
     try {
@@ -193,7 +210,7 @@ function getLastSessionSummary(): string | null {
           .slice(0, 5)
           .map((e: { name: string }) => e.name);
         if (realEntities.length > 0) {
-          parts.push(`Themen: ${realEntities.join(', ')}`);
+          parts.push(`Topics: ${realEntities.join(', ')}`);
         }
       }
     } catch { /* non-fatal */ }
@@ -206,7 +223,7 @@ function getLastSessionSummary(): string | null {
       try {
         const topics = JSON.parse(lastSession.topics) as string[];
         if (topics.length > 0) {
-          parts.push(`Themen: ${topics.slice(0, 3).join(', ')}`);
+          parts.push(`Topics: ${topics.slice(0, 3).join(', ')}`);
         }
       } catch { /* no topics */ }
 
@@ -217,7 +234,7 @@ function getLastSessionSummary(): string | null {
       if (lastMessages.length > 0) {
         const lastMsg = lastMessages[0].content;
         const truncated = lastMsg.length > 100 ? lastMsg.substring(0, 100) + '...' : lastMsg;
-        parts.push(`Letzter Austausch: "${truncated}"`);
+        parts.push(`Last exchange: "${truncated}"`);
       }
     }
 
@@ -226,7 +243,7 @@ function getLastSessionSummary(): string | null {
       .map(task => task.content);
 
     if (openTasks.length > 0) {
-      parts.push(`Offene Tasks aus letzter Session: ${openTasks.join('; ')}`);
+      parts.push(`Open tasks from last session: ${openTasks.join('; ')}`);
     }
 
     return parts.join('\n');
@@ -244,14 +261,14 @@ function formatUpcoming(match: ProspectiveMatch): string {
     const diffH = Math.round((date.getTime() - now.getTime()) / (60 * 60 * 1000));
 
     let timeLabel: string;
-    if (diffH <= 1) timeLabel = 'In ~1 Stunde';
-    else if (diffH < 24) timeLabel = `In ~${diffH} Stunden`;
+    if (diffH <= 1) timeLabel = 'In ~1 hour';
+    else if (diffH < 24) timeLabel = `In ~${diffH} hours`;
     else {
       const diffDays = Math.round(diffH / 24);
-      if (diffDays === 1) timeLabel = 'Morgen';
-      else if (diffDays <= 3) timeLabel = `In ~${diffDays} Tagen`;
+      if (diffDays === 1) timeLabel = 'Tomorrow';
+      else if (diffDays <= 3) timeLabel = `In ~${diffDays} days`;
       else {
-        const dayStr = date.toLocaleDateString('de-DE', { weekday: 'long' });
+        const dayStr = date.toLocaleDateString('en-US', { weekday: 'long' });
         timeLabel = dayStr;
       }
     }
@@ -283,7 +300,7 @@ function isGarbageWord(word: string): boolean {
 
 function isGarbageSummary(summary: string): boolean {
   const firstLine = summary.split('\n')[0] || '';
-  const themaMatch = firstLine.match(/^Thema:\s*(.+?)\.?\s*$/i);
+  const themaMatch = firstLine.match(/^(?:Thema|Topic):\s*(.+?)\.?\s*$/i);
   if (!themaMatch) return false;
   const topic = themaMatch[1];
   const words = topic.toLowerCase().split(/[\s,.]+/).filter(w => w.length > 1);

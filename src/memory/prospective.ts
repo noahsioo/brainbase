@@ -185,9 +185,20 @@ export function checkProspectiveTriggers(message: string): ProspectiveMatch[] {
 
       if (!dismissed) {
         const triggerStr = node.emotional_tag?.replace('trigger:', '') || '';
-        const triggerWords = triggerStr.split(',').filter(w => w.length > 0);
+        const TRIGGER_STOPWORDS = new Set([
+          'mich', 'dich', 'sich', 'habe', 'hast', 'haben', 'wird', 'werde', 'werden',
+          'sein', 'eine', 'einen', 'einem', 'einer', 'dass', 'wenn', 'dann', 'auch',
+          'noch', 'schon', 'gerade', 'jetzt', 'heute', 'morgen', 'daran', 'darin',
+          'mein', 'dein', 'sein', 'ihre', 'unser', 'euer', 'nicht', 'aber', 'oder',
+          'weil', 'nach', 'naechsten', 'naechste', 'naechstes', 'wichtig', 'wichtiges',
+          'erinnere', 'erinnern', 'this', 'that', 'with', 'from', 'have', 'make',
+        ]);
+        const triggerWords = triggerStr.split(',')
+          .map(w => w.trim().replace(/[.!?,;]/g, ''))
+          .filter(w => w.length >= 5 && !TRIGGER_STOPWORDS.has(w.toLowerCase()));
         for (const tw of triggerWords) {
-          if (lower.includes(tw)) {
+          const wordBoundary = new RegExp(`\\b${tw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+          if (wordBoundary.test(lower)) {
             matched = true;
             trigger = tw;
             break;
@@ -228,7 +239,7 @@ export function trackFailure(message: string, sessionId: string): Node | null {
     .map(n => n.content.slice(0, 50))
     .join('; ');
 
-  const failureContent = `Negative feedback bei: ${contextSummary}`;
+  const failureContent = `Negative feedback on: ${contextSummary}`;
 
   // Don't create duplicate failures
   const existing = db.prepare(
@@ -395,17 +406,19 @@ export function formatProactiveReminder(node: Node): string {
     }
   } catch { /* skip */ }
 
-  if (hoursUntil <= 0) {
-    return `UEBERFAELLIG — erinnere den User SOFORT: "${node.content}"`;
+  if (!isFinite(hoursUntil)) {
+    return `Reminder: "${node.content}"`;
+  } else if (hoursUntil <= 0) {
+    return `OVERDUE — remind the user IMMEDIATELY: "${node.content}"`;
   } else if (hoursUntil <= 2) {
-    return `DRINGEND (in ~${Math.round(hoursUntil * 60)} Min) — erinnere den User: "${node.content}"`;
+    return `URGENT (in ~${Math.round(hoursUntil * 60)} min) — remind the user: "${node.content}"`;
   } else if (hoursUntil <= 6) {
-    return `Heute noch faellig (in ~${Math.round(hoursUntil)}h) — erinnere den User: "${node.content}"`;
+    return `Due today (in ~${Math.round(hoursUntil)}h) — remind the user: "${node.content}"`;
   } else if (hoursUntil <= 24) {
-    return `Morgen faellig — erwaehne wenn passend: "${node.content}"`;
+    return `Due tomorrow — mention if appropriate: "${node.content}"`;
   } else {
     const days = Math.round(hoursUntil / 24);
-    return `In ~${days} Tagen — zur Info: "${node.content}"`;
+    return `In ~${days} days — for reference: "${node.content}"`;
   }
 }
 

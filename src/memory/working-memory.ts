@@ -323,13 +323,13 @@ export function buildConversationSummary(
   const displayReference = getPrimaryDisplayReference(memory.references, memory.current_topic);
 
   if (memory.current_topic) {
-    parts.push(`Thema: ${memory.current_topic}`);
+    parts.push(`Topic: ${memory.current_topic}`);
   }
 
   if (topEntities.length > 0) {
     const entityStr = topEntities.join(', ');
     if (entityStr !== memory.current_topic) {
-      parts.push(`Fokus: ${entityStr}`);
+      parts.push(`Focus: ${entityStr}`);
     }
   }
 

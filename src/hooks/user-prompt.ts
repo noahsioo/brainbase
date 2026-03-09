@@ -14,7 +14,7 @@ import { GATE_HEBBIAN, GATE_LLM } from '../signal/signal-strength.js';
 import { processThalamic, deriveSystemMode } from '../signal/thalamus.js';
 import { detectFeedbackSignal, detectMood, setCurrentMood, applyFeedbackToRecentNodes, applyFeedbackOutcome, applySomaticMarkers, applyContextFeedback, detectEmpathyMode, trackProviderFeedback } from '../signal/echo.js';
 import { updateHotMemoryInDb } from '../memory/hot.js';
-import { checkProspectiveTriggers, getUpcomingReminders } from '../memory/prospective.js';
+import { checkProspectiveTriggers, getUpcomingReminders, scoreReminderRelevance, formatProactiveReminder } from '../memory/prospective.js';
 import { createEmbeddingClient } from '../llm/embeddings.js';
 import { detectEmotionBypass } from '../senses/emotion-sense.js';
 import { getStability } from '../senses/stability-sense.js';
@@ -758,12 +758,13 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
 
   // 9.2: Curiosity impulses — jetzt via Hunger-Slot in Context Generator (V7)
 
-  // Inject prospective memory reminders
+  // V13: Relevance-gated Reminder Injection
   if (prospectiveMatches.length > 0) {
-    const reminders = prospectiveMatches
-      .map(m => `- ${m.node.content}`)
+    // Akute Matches (keyword/time triggered) — immer zeigen, aber proaktiv formatiert
+    const proactiveReminders = prospectiveMatches
+      .map(m => `- ${formatProactiveReminder(m.node)}`)
       .join('\n');
-    const reminderBlock = `\n## Erinnerung\n${reminders}\n`;
+    const reminderBlock = `\n## ACTION REQUIRED\n${proactiveReminders}\n`;
     finalContext = finalContext ? finalContext + reminderBlock : reminderBlock;
 
     // V6-2: Auto-dismiss time-based triggers (shown once = done)
@@ -771,7 +772,6 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       if (match.trigger === 'time') {
         try {
           const meta = match.node.metadata ? JSON.parse(match.node.metadata) : {};
-          // V10-2: Recurring Nodes nicht dismissen — wurden in checkProspectiveTriggers erneuert
           if (meta.trigger_type !== 'recurring' && !meta.recurring) {
             meta.dismissed = true;
             updateNode(match.node.id, { metadata: JSON.stringify(meta) });
@@ -780,15 +780,31 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       }
     }
   } else {
-    // V10-1: Kein akuter Match — upcoming Reminders einblenden
+    // V13: Upcoming Reminders NUR wenn relevant (score >= 0.5) — max 2
     try {
       const upcoming = getUpcomingReminders(48);
       if (upcoming.length > 0) {
-        const upcomingBlock = upcoming
-          .map(m => `- ${m.node.content} (${m.trigger})`)
-          .join('\n');
-        const upcomingSection = `\n## Bald faellig\n${upcomingBlock}\n`;
-        finalContext = finalContext ? finalContext + upcomingSection : upcomingSection;
+        const wmForReminders = getWorkingMemory(sessionId);
+        const activeEntityNames = wmForReminders
+          ? Object.keys(wmForReminders.active_entities)
+          : [];
+
+        const scored = upcoming
+          .map(m => ({
+            match: m,
+            score: scoreReminderRelevance(m.node, effectiveTopic, activeEntityNames),
+          }))
+          .filter(s => s.score >= 0.5)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 2);
+
+        if (scored.length > 0) {
+          const proactiveBlock = scored
+            .map(s => `- ${formatProactiveReminder(s.match.node)}`)
+            .join('\n');
+          const upcomingSection = `\n## ACTION REQUIRED\n${proactiveBlock}\n`;
+          finalContext = finalContext ? finalContext + upcomingSection : upcomingSection;
+        }
       }
     } catch { /* non-fatal */ }
   }
@@ -799,7 +815,7 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     finalContext = watcherSystemMessage;
   }
 
-  const isEmpty = !finalContext || finalContext === 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.';
+  const isEmpty = !finalContext || finalContext === 'No memories stored yet. The system learns automatically from sessions.';
 
   return {
     context: isEmpty ? null : finalContext,

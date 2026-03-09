@@ -17,9 +17,9 @@ export function buildMemoryBlock(): string {
   const hotContent = generateHotMemory();
   return `${MEMORY_BLOCK_START}
 ## Memory System Active
-Du hast Zugriff auf ein persistentes Memory System.
-Wichtige Informationen werden automatisch gespeichert.
-Bei Themenwechsel werden relevante Memories automatisch geladen.
+You have access to a persistent Memory System.
+Important information is stored automatically.
+When topics change, relevant memories are loaded automatically.
 
 ${hotContent}
 ${MEMORY_BLOCK_END}`;

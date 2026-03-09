@@ -6,7 +6,7 @@ import { getMetaProfile } from '../tacit/meta-learner.js';
 import { getOpenTasks } from '../watcher/task-watcher.js';
 import { buildGhostContext } from './ghost-context.js';
 import { getChunksForContext } from './chunking.js';
-import { getRelevantFailures, getActiveLifeEvents, getUpcomingLifeEvents } from './prospective.js';
+import { getRelevantFailures, getActiveLifeEvents, getUpcomingLifeEvents, scoreLifeEventRelevance } from './prospective.js';
 import { cosineSimilarity, getEmbeddingCache } from '../llm/embeddings.js';
 import { getOpenGaps } from '../learning/gap-detector.js';
 // V8-1: buildUserModel, getTopicExpertise entfernt (Budget-Modifier vereinfacht)
@@ -135,6 +135,8 @@ const MAX_WORKING_MEMORY_REFERENCE_LENGTH = 48;
 function isDisplayWorthy(node: Node): boolean {
   if (node.content.length < 15) return false;
   if (node.type === 'auto_topic') return false;
+  if (node.type === 'failure') return false;
+  if (node.type === 'system_knowledge') return false;
   if (node.content.includes('(+')) return false;
   const words = node.content.toLowerCase().split(/\s+/);
   const realWords = words.filter(w => !DISPLAY_STOPWORDS.has(w));
@@ -643,7 +645,7 @@ function buildEntityProfileSlot(
     }
   }
 
-  let text = `## Ueber ${userName}\n`;
+  let text = `## About ${userName}\n`;
 
   for (const [label, targets] of Object.entries(relationGroups)) {
     // 15.2: JOL annotation on relation targets
@@ -714,22 +716,22 @@ function buildEntityProfileSlot(
 
   // 13.2: Affective empathy → strengths FIRST, hide negatives (don't pile on)
   if (empathyMode === 'affective' && positiveEntities.length > 0) {
-    const strengthLine = `- Staerken: ${positiveEntities.join(', ')}\n`;
+    const strengthLine = `- Strengths: ${positiveEntities.join(', ')}\n`;
     if (estimateTokens(text + strengthLine) <= budget) {
-      text = `## Ueber ${userName}\n` + strengthLine + text.replace(`## Ueber ${userName}\n`, '');
+      text = `## About ${userName}\n` + strengthLine + text.replace(`## About ${userName}\n`, '');
     }
   } else {
     if (positiveEntities.length > 0) {
-      const line = `- Staerken: ${positiveEntities.join(', ')}\n`;
+      const line = `- Strengths: ${positiveEntities.join(', ')}\n`;
       if (estimateTokens(text + line) <= budget) text += line;
     }
     if (negativeEntities.length > 0) {
-      const line = `- Vorsicht bei: ${negativeEntities.join(', ')}\n`;
+      const line = `- Caution with: ${negativeEntities.join(', ')}\n`;
       if (estimateTokens(text + line) <= budget) text += line;
     }
   }
 
-  if (text === `## Ueber ${userName}\n`) return '';
+  if (text === `## About ${userName}\n`) return '';
   return truncateToTokens(text, budget);
 }
 
@@ -744,14 +746,14 @@ function buildLegacyCoreSlot(budget: number, sessionTopic?: string, sessionId?: 
 
     if (sessionMeaningful.length === 0) return '';
 
-    let sessionText = '## Ueber den User\n';
+    let sessionText = '## About the User\n';
     for (const node of sessionMeaningful.slice(0, 4)) {
       const line = `- ${node.content}\n`;
       if (estimateTokens(sessionText + line) > budget) break;
       sessionText += line;
     }
 
-    if (sessionText === '## Ueber den User\n') return '';
+    if (sessionText === '## About the User\n') return '';
     return truncateToTokens(sessionText, budget);
   }
 
@@ -778,7 +780,7 @@ function buildLegacyCoreSlot(budget: number, sessionTopic?: string, sessionId?: 
 
   if (meaningful.length === 0) return '';
 
-  let text = '## Ueber den User\n';
+  let text = '## About the User\n';
   for (const node of meaningful) {
     const line = `- ${node.content}\n`;
     if (estimateTokens(text + line) > budget) break;
@@ -807,19 +809,29 @@ function isTopicRelevant(node: Node, topic: string | undefined): boolean {
   if (!topic) return true;
   if (UNIVERSAL_TYPES.has(node.type)) return true;
 
-  const nodeVec = getEmbedding(node.id);
-  if (nodeVec && _sessionTopicVec) {
-    const sim = cosineSimilarity(nodeVec, _sessionTopicVec);
-    if (sim > 0.4) return true;
-    if (sim < 0.15) return false;
-  }
-
   const topicLower = topic.toLowerCase();
   const topicWords = topicLower.split(/\s+/).filter(w => w.length > 3);
   const contentLower = node.content.toLowerCase();
 
+  // Word overlap is the strongest signal
   if (contentLower.includes(topicLower)) return true;
   if (topicWords.some(w => contentLower.includes(w))) return true;
+
+  // Embedding similarity — stricter for entities (avoid vague tech clustering)
+  const nodeVec = getEmbedding(node.id);
+  if (nodeVec && _sessionTopicVec) {
+    const sim = cosineSimilarity(nodeVec, _sessionTopicVec);
+    const threshold = node.type === 'entity' ? 0.55 : 0.4;
+    if (sim > threshold) return true;
+    if (sim < 0.15) return false;
+  }
+
+  // Use message embedding as secondary check (more specific than topic)
+  if (nodeVec && _sessionMessageVec) {
+    const msgSim = cosineSimilarity(nodeVec, _sessionMessageVec);
+    const msgThreshold = node.type === 'entity' ? 0.5 : 0.35;
+    if (msgSim > msgThreshold) return true;
+  }
 
   return false;
 }
@@ -868,8 +880,8 @@ function buildSceneSlot(
 
   let timeStr = '';
   const signal = contextSignal ?? null;
-  if (signal?.isDeepSession) timeStr = ', tiefe Session';
-  else if (signal?.isNewSession) timeStr = ', Session-Start';
+  if (signal?.isDeepSession) timeStr = ', deep session';
+  else if (signal?.isNewSession) timeStr = ', session start';
 
   const sameAnchor = normalizeProfileHint(sceneAnchor) === normalizeProfileHint(topicStr);
   const headerLine = sameAnchor
@@ -894,31 +906,31 @@ function buildWorkingMemorySlot(budget: number, sessionId?: string): string {
   }
 
   if (memory.degraded_semantic) {
-    lines.push('Semantik aktuell degradiert');
+    lines.push('Semantics currently degraded');
   }
 
   if (displayReference) {
-    lines.push(`Aktiver Verweis: ${displayReference}`);
+    lines.push(`Active reference: ${displayReference}`);
   }
 
   if (memory.context_stack.length > 0) {
-    lines.push(`Kontext: ${memory.context_stack.slice(0, 4).join(' -> ')}`);
+    lines.push(`Context: ${memory.context_stack.slice(0, 4).join(' -> ')}`);
   }
 
   if (memory.open_questions.length > 0) {
-    lines.push(`Offen: ${memory.open_questions.slice(0, 2).join(' | ')}`);
+    lines.push(`Open: ${memory.open_questions.slice(0, 2).join(' | ')}`);
   }
 
   if (lines.length === 0) return '';
 
-  let text = '## Arbeitsgedaechtnis\n';
+  let text = '## Working Memory\n';
   for (const line of lines) {
     const nextLine = `- ${line}\n`;
     if (estimateTokens(text + nextLine) > budget) break;
     text += nextLine;
   }
 
-  if (text === '## Arbeitsgedaechtnis\n') return '';
+  if (text === '## Working Memory\n') return '';
   return truncateToTokens(text, budget);
 }
 
@@ -1042,9 +1054,9 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
     const relevant = nodes.filter(n => isTopicRelevant(n, sessionTopic));
     const irrelevant = nodes.filter(n => !isTopicRelevant(n, sessionTopic));
     nodes = sortByContextScore(relevant);
-    // Fallback: wenn topic-relevant zu wenig (<3), Top irrelevant dazunehmen
-    if (nodes.length < 3) {
-      nodes = [...nodes, ...sortByContextScore(irrelevant).slice(0, 3 - nodes.length)];
+    // Fallback: nur wenn ZERO relevante Nodes, dann irrelevante als Fallback
+    if (nodes.length === 0) {
+      nodes = sortByContextScore(irrelevant).slice(0, 3);
     }
   } else {
     nodes = sortByContextScore(nodes);
@@ -1052,7 +1064,7 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
 
   if (nodes.length === 0) return '';
 
-  let text = '## Aktiver Kontext\n';
+  let text = '## Active Context\n';
   const seen = new Set<string>();
   const trackedBulletNodeIds = new Set<string>();
   const trackDisplayedNodes = (...nodeIds: string[]): void => {
@@ -1064,7 +1076,7 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
     }
   };
 
-  const entityNodes = nodes.filter(n => n.type === 'entity');
+  const entityNodes = nodes.filter(n => n.type === 'entity').slice(0, 5);
   const nonEntityNodes = nodes.filter(n => n.type !== 'entity');
 
   // Pass 1: Build entity association map + collect orphans
@@ -1210,7 +1222,7 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
     trackDisplayedNodes(node.id);
   }
 
-  if (text === '## Aktiver Kontext\n') return '';
+  if (text === '## Active Context\n') return '';
 
   return truncateToTokens(text, budget);
 }
@@ -1262,19 +1274,19 @@ function buildSessionMomentumSlot(budget: number, currentTopic?: string, session
     return '';
   }
 
-  let text = '## Letzte Session\n';
+  let text = '## Last Session\n';
 
   if (lastSession.mood_end) {
-    text += `- Stimmung: ${lastSession.mood_end}\n`;
+    text += `- Mood: ${lastSession.mood_end}\n`;
   }
   if (lastSession.productivity !== null) {
-    const prodLabel = lastSession.productivity > 0.7 ? 'hoch' :
-      lastSession.productivity > 0.4 ? 'mittel' : 'niedrig';
-    text += `- Produktivitaet: ${prodLabel}\n`;
+    const prodLabel = lastSession.productivity > 0.7 ? 'high' :
+      lastSession.productivity > 0.4 ? 'medium' : 'low';
+    text += `- Productivity: ${prodLabel}\n`;
   }
 
   if (parsedTopics.length > 0) {
-    text += `- Themen: ${parsedTopics.join(', ')}\n`;
+    text += `- Topics: ${parsedTopics.join(', ')}\n`;
   }
 
   return truncateToTokens(text, budget);
@@ -1294,7 +1306,7 @@ function buildEntityGraphSlot(budget: number, topic?: string, sessionId?: string
   const edges = getEdgesForNode(topicEntity.id);
   if (edges.length === 0) return '';
 
-  let text = `## Zum Thema: ${topicEntity.content}\n`;
+  let text = `## On Topic: ${topicEntity.content}\n`;
   const outputHistory = getContextOutputHistory(sessionId);
   const sessionFeedback = getSessionContextFeedbackScores(sessionId);
   const trackedGraphNodeIds = new Set<string>();
@@ -1397,7 +1409,7 @@ function buildEntityGraphSlot(budget: number, topic?: string, sessionId?: string
     trackDisplayedGraphNodes(fact.id);
   }
 
-  if (text === `## Zum Thema: ${topicEntity.content}\n`) return '';
+  if (text === `## On Topic: ${topicEntity.content}\n`) return '';
   return truncateToTokens(text, budget);
 }
 
@@ -1422,7 +1434,7 @@ function buildLegacyWarmSlot(budget: number, topic: string, sessionId?: string):
 
   if (relevant.length === 0) return '';
 
-  let text = `## Zum Thema: ${topic}\n`;
+  let text = `## On Topic: ${topic}\n`;
   const trackedWarmNodeIds = new Set<string>();
   for (const node of relevant) {
     const line = `- ${node.content}\n`;
@@ -1468,7 +1480,7 @@ function buildSerendipitySlot(budget: number, mood?: string, salience?: string):
   if (!randomNode) return '';
 
   return truncateToTokens(
-    `## Kreative Verbindung\n- ${randomNode.content}\n`,
+    `## Creative Connection\n- ${randomNode.content}\n`,
     budget,
   );
 }
@@ -1532,43 +1544,52 @@ function buildProspectionSlot(budget: number, currentTopic?: string, sessionId?:
 
   if (parts.length === 0) return '';
 
-  return truncateToTokens(`## Antizipation\n- ${parts.join('\n- ')}\n`, budget);
+  return truncateToTokens(`## Anticipation\n- ${parts.join('\n- ')}\n`, budget);
 }
 
 // ── V11-4: Life Context — aktive Lebensphasen ────────────────
 
-function buildLifeContextSlot(budget: number): string {
+function buildLifeContextSlot(budget: number, topic?: string, intent?: string, activeEntities?: string[]): string {
   const active = getActiveLifeEvents();
   const upcoming = getUpcomingLifeEvents(30);
 
   if (active.length === 0 && upcoming.length === 0) return '';
 
+  // V13: Relevance Gate — nur Life Events mit score >= 0.3 zeigen
+  const allEvents = [...active, ...upcoming];
+  const scored = allEvents
+    .map(node => ({
+      node,
+      score: scoreLifeEventRelevance(node, topic, activeEntities, intent),
+      isActive: active.includes(node),
+    }))
+    .filter(s => s.score >= 0.3)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+
+  if (scored.length === 0) return '';
+
   const now = Date.now();
   const parts: string[] = [];
 
-  for (const node of active) {
+  for (const { node, isActive } of scored) {
     try {
       const meta = JSON.parse(node.metadata || '{}') as Record<string, unknown>;
-      const validUntil = meta.valid_until as number;
-      const daysLeft = Math.round((validUntil - now) / (24 * 60 * 60 * 1000));
-      parts.push(`Aktuelle Phase: ${node.content} (noch ~${daysLeft} Tage)`);
+      if (isActive) {
+        const validUntil = meta.valid_until as number;
+        const daysLeft = Math.round((validUntil - now) / (24 * 60 * 60 * 1000));
+        parts.push(`Current phase: ${node.content} (~${daysLeft} days left)`);
+      } else {
+        const validFrom = meta.valid_from as number;
+        const daysUntil = Math.round((validFrom - now) / (24 * 60 * 60 * 1000));
+        parts.push(`Soon: ${node.content} (in ~${daysUntil} days)`);
+      }
     } catch {
-      parts.push(`Aktuelle Phase: ${node.content}`);
+      parts.push(isActive ? `Current phase: ${node.content}` : `Soon: ${node.content}`);
     }
   }
 
-  for (const node of upcoming) {
-    try {
-      const meta = JSON.parse(node.metadata || '{}') as Record<string, unknown>;
-      const validFrom = meta.valid_from as number;
-      const daysUntil = Math.round((validFrom - now) / (24 * 60 * 60 * 1000));
-      parts.push(`Bald: ${node.content} (in ~${daysUntil} Tagen)`);
-    } catch {
-      parts.push(`Bald: ${node.content}`);
-    }
-  }
-
-  return truncateToTokens(`## Lebenskontext\n- ${parts.join('\n- ')}\n`, budget);
+  return truncateToTokens(`## Life Context\n- ${parts.join('\n- ')}\n`, budget);
 }
 
 // ── Task Reminder (unchanged) ───────────────────────────────
@@ -1577,7 +1598,7 @@ function buildTaskReminderSlot(budget: number, sessionId?: string): string {
   const tasks = getOpenTasks(sessionId);
   if (tasks.length === 0) return '';
 
-  let text = '## Offene Aufgaben\n';
+  let text = '## Open Tasks\n';
   for (const task of tasks) {
     const deadline = task.emotional_tag?.startsWith('deadline:')
       ? ` (${task.emotional_tag.replace('deadline:', '')})`
@@ -1618,7 +1639,7 @@ function buildGhostContextSlot(
   const ghost = buildGhostContext(currentTopic, topicExpertise);
   if (!ghost) return '';
 
-  let text = `## Expertise-Hinweis\n- ${ghost}\n`;
+  let text = `## Expertise Note\n- ${ghost}\n`;
 
   // M33: Metacognition — show open knowledge gaps for this topic
   if (sessionPhase !== 'deep') {
@@ -1633,7 +1654,7 @@ function buildGhostContextSlot(
   );
 
   for (const gap of relevantGaps.slice(0, 2)) {
-    const line = `- Wissensluecke: ${gap.description}\n`;
+    const line = `- Knowledge gap: ${gap.description}\n`;
     if (estimateTokens(text + line) > budget) break;
     text += line;
   }
@@ -1647,7 +1668,7 @@ function buildFailureWarningSlot(budget: number, topic: string, sessionId?: stri
   const failures = getRelevantFailures(topic, sessionId);
   if (failures.length === 0) return '';
 
-  let text = '## Vorsicht\n';
+  let text = '## Caution\n';
   for (const node of failures) {
     const line = `- ${node.content}\n`;
     if (estimateTokens(text + line) > budget) break;
@@ -1696,7 +1717,7 @@ function buildConflictSlot(budget: number, sessionId?: string): string {
 
   if (contradictions.length === 0) return '';
 
-  let text = '## Hinweis: Widersprueche\n';
+  let text = '## Note: Contradictions\n';
   for (const c of contradictions.slice(0, 3)) {
     const line = `- "${c.src}" vs "${c.tgt}"\n`;
     if (estimateTokens(text + line) > budget) break;
@@ -1732,7 +1753,7 @@ function buildCounterEvidenceSlot(budget: number, sessionId?: string): string {
   if (counterEvidence.size === 0) return '';
 
   return truncateToTokens(
-    `## Aber beachte\n${[...counterEvidence].slice(0, 2).map(c => `- ${c}`).join('\n')}\n`,
+    `## Counter-Evidence\n${[...counterEvidence].slice(0, 2).map(c => `- ${c}`).join('\n')}\n`,
     budget
   );
 }
@@ -1756,16 +1777,16 @@ function buildMetaInsightSlot(
 
   // 13.2: Empathy-based hint (first, most important)
   if (empathyMode === 'affective') {
-    lines.push('User kaempft emotional. Zeige Verstaendnis, betone Staerken und Fortschritte.');
+    lines.push('User is struggling emotionally. Show empathy, highlight strengths and progress.');
   } else if (empathyMode === 'cognitive') {
-    lines.push('User hat ein konkretes Problem. Fokus auf Loesung und technische Details.');
+    lines.push('User has a specific problem. Focus on solutions and technical details.');
   }
 
   if (allowGlobalUserMeta && profile.dominant_type !== 'unknown') {
     const hints: Record<string, string> = {
-      pointer: 'User ist ein "Zeiger" - beobachte Verhalten statt auf Erklaerungen zu warten',
-      explicit: 'User erklaert Praeferenzen direkt - achte auf explizite Anweisungen',
-      corrector: 'User korrigiert oft - tracke Korrekturen als negative Signale',
+      pointer: 'User is a "pointer" — observe behavior rather than waiting for explanations.',
+      explicit: 'User states preferences directly — follow explicit instructions.',
+      corrector: 'User corrects often — track corrections as negative signals.',
     };
     const hint = hints[profile.dominant_type];
     if (hint) lines.push(hint);
@@ -1774,10 +1795,10 @@ function buildMetaInsightSlot(
   const lp = profile.learning_profile;
   if (allowGlobalUserMeta && lp && profile.total_messages_analyzed >= 20) {
     const dominant = [
-      { key: 'examples', val: lp.learns_by_examples, hint: 'User lernt am besten durch Beispiele. Gib konkrete Beispiele.' },
-      { key: 'doing', val: lp.learns_by_doing, hint: 'User lernt durch Machen. Weniger erklaeren, mehr umsetzen.' },
-      { key: 'explanation', val: lp.learns_by_explanation, hint: 'User will Hintergruende verstehen. Erklaere das Warum.' },
-      { key: 'vision', val: lp.learns_by_vision, hint: 'User denkt in grossen Visionen. Big Picture zuerst, dann Details.' },
+      { key: 'examples', val: lp.learns_by_examples, hint: 'User learns best through examples. Give concrete examples.' },
+      { key: 'doing', val: lp.learns_by_doing, hint: 'User learns by doing. Less explaining, more building.' },
+      { key: 'explanation', val: lp.learns_by_explanation, hint: 'User wants to understand the why. Explain the reasoning.' },
+      { key: 'vision', val: lp.learns_by_vision, hint: 'User thinks in big visions. Big picture first, then details.' },
     ].sort((a, b) => b.val - a.val);
 
     if (dominant[0].val > 0.6) {
@@ -1785,39 +1806,44 @@ function buildMetaInsightSlot(
     }
 
     if (lp.prefers_direct > 0.65) {
-      lines.push('User bevorzugt direkte, knappe Antworten.');
+      lines.push('User prefers direct, concise answers.');
     } else if (lp.prefers_detailed > 0.65) {
-      lines.push('User mag ausfuehrliche Erklaerungen.');
+      lines.push('User likes detailed explanations.');
     }
   }
 
   // 13.3: Task-Set hint
   const TASK_HINTS: Record<string, string> = {
-    debugging: 'User debuggt. Fokus auf Fehleranalyse und Loesungen.',
-    learning: 'User lernt. Erklaere Konzepte und gib Beispiele.',
-    building: 'User baut. Weniger erklaeren, mehr Code.',
-    exploring: 'User exploriert. Zeige Optionen und Verbindungen.',
-    chatting: 'User chattet. Halte dich kurz.',
-    urgent: 'User hat es eilig. Nur das Wichtigste.',
+    debugging: 'User is debugging. Focus on error analysis and solutions.',
+    learning: 'User is learning. Explain concepts and give examples.',
+    building: 'User is building. Less explaining, more code.',
+    exploring: 'User is exploring. Show options and connections.',
+    chatting: 'User is chatting. Keep it brief.',
+    urgent: 'User is in a hurry. Only the essentials.',
   };
   if (taskMode && TASK_HINTS[taskMode]) {
     lines.push(TASK_HINTS[taskMode]);
   }
 
-  // V11-5: Life Phase hint
+  // V13: Life Phase hint — nur wenn relevant
   try {
     const activeLE = getActiveLifeEvents();
     if (activeLE.length > 0) {
-      lines.push(`User ist gerade in: ${activeLE.map(le => le.content).join(', ')}. Beruecksichtige diesen Lebenskontext.`);
+      const relevantLE = activeLE.filter(le =>
+        scoreLifeEventRelevance(le, currentTopic, undefined, taskMode) >= 0.3
+      );
+      if (relevantLE.length > 0) {
+        lines.push(`User is currently in: ${relevantLE.map(le => le.content).join(', ')}. Consider this life context.`);
+      }
     }
   } catch { /* non-fatal */ }
 
   // 13.1: Expertise-based hint
   if (topicExpertise !== undefined) {
     if (topicExpertise > 0.7) {
-      lines.push('User ist Experte in diesem Bereich. Weniger erklaeren, direkt umsetzen.');
+      lines.push('User is an expert here. Less explaining, just build.');
     } else if (topicExpertise < 0.3) {
-      lines.push('User ist Beginner hier. Mehr Kontext und Erklaerungen geben.');
+      lines.push('User is a beginner here. More context and explanations.');
     }
   }
 
@@ -1825,13 +1851,13 @@ function buildMetaInsightSlot(
   if (allowGlobalSystemMeta) {
     const selfModel = getSelfModel();
     if (selfModel) {
-      const maturity = selfModel.cortical_ratio > 0.3 ? 'reif' : selfModel.cortical_ratio > 0.1 ? 'wachsend' : 'jung';
-      lines.push(`System: ${selfModel.total_nodes} Fakten, ${selfModel.entity_count} Entitaeten, ${maturity} (${Math.round(selfModel.cortical_ratio * 100)}% langzeitgespeichert).`);
+      const maturity = selfModel.cortical_ratio > 0.3 ? 'mature' : selfModel.cortical_ratio > 0.1 ? 'growing' : 'young';
+      lines.push(`System: ${selfModel.total_nodes} facts, ${selfModel.entity_count} entities, ${maturity} (${Math.round(selfModel.cortical_ratio * 100)}% long-term stored).`);
       if (selfModel.strongest_domains.length > 0) {
-        lines.push(`Staerkste Bereiche: ${selfModel.strongest_domains.join(', ')}.`);
+        lines.push(`Strongest domains: ${selfModel.strongest_domains.join(', ')}.`);
       }
       if (selfModel.weakest_areas.length > 0) {
-        lines.push(`Wissensluecken: ${selfModel.weakest_areas.join(', ')}.`);
+        lines.push(`Knowledge gaps: ${selfModel.weakest_areas.join(', ')}.`);
       }
     }
   }
@@ -1840,13 +1866,13 @@ function buildMetaInsightSlot(
   if (allowGlobalSystemMeta) {
     const devPhase = getDevelopmentPhase();
     const phaseNames: Record<string, string> = {
-      infant: 'Saeuglings-Phase (alles aufnehmen)',
-      child: 'Kind-Phase (schnell lernen)',
-      teen: 'Teenager-Phase (spezialisieren)',
-      adult: 'Erwachsenen-Phase (stabil + selektiv)',
-      wise: 'Weise-Phase (tiefes Wissensnetz)',
+      infant: 'Infant phase (absorb everything)',
+      child: 'Child phase (learn fast)',
+      teen: 'Teen phase (specialize)',
+      adult: 'Adult phase (stable + selective)',
+      wise: 'Wise phase (deep knowledge network)',
     };
-    lines.push(`Entwicklungsphase: ${phaseNames[devPhase.phase]} (Session ${devPhase.session_count}).`);
+    lines.push(`Development phase: ${phaseNames[devPhase.phase]} (Session ${devPhase.session_count}).`);
   }
 
   // 17.3: DMN — kreative Verbindungen seit letzter Nachricht
@@ -1856,7 +1882,7 @@ function buildMetaInsightSlot(
         "SELECT COUNT(*) as c FROM edges WHERE type = 'inferred' AND created_at > ?"
       ).get(Date.now() - 30 * 60 * 1000) as { c: number };
       if (dmnRow.c > 0) {
-        lines.push(`System hat ${dmnRow.c} neue Verbindungen im Hintergrund entdeckt.`);
+        lines.push(`System discovered ${dmnRow.c} new connections in background.`);
       }
     } catch {}
   }
@@ -1865,9 +1891,9 @@ function buildMetaInsightSlot(
   if (allowGlobalSystemMeta) {
     const sysMoodMeta = getSystemMood();
     if (sysMoodMeta.energy < 0.3) {
-      lines.push('System-Energie niedrig. Fokus auf Wesentliches.');
+      lines.push('System energy low. Focus on essentials.');
     } else if (sysMoodMeta.curiosity > 0.7) {
-      lines.push('System ist neugierig — bereit fuer neue Themen.');
+      lines.push('System is curious — ready for new topics.');
     }
   }
 
@@ -1876,16 +1902,16 @@ function buildMetaInsightSlot(
     try {
       const cal = calibrateConfidence();
       if (cal.direction === 'down') {
-        lines.push('System-Kalibration: Confidence wird korrigiert (overconfident). Fakten mit Vorsicht.');
+        lines.push('System calibration: Confidence being corrected (overconfident). Use facts with caution.');
       } else if (cal.direction === 'up') {
-        lines.push('System-Kalibration: Wissen ist zuverlaessig (gut kalibriert).');
+        lines.push('System calibration: Knowledge is reliable (well calibrated).');
       }
     } catch { /* non-fatal */ }
   }
 
   if (lines.length === 0) return '';
 
-  let text = '## Lernhinweis\n';
+  let text = '## System Hints\n';
   for (const line of lines) {
     text += `- ${line}\n`;
   }
@@ -1920,7 +1946,7 @@ function buildEpisodeSlot(budget: number, topic?: string, sessionId?: string): s
   }
 
   const toShow = relevant.slice(0, 2);
-  let text = '## Fruehere Sessions\n';
+  let text = '## Previous Sessions\n';
   for (const ep of toShow) {
     const date = new Date(ep.created_at).toLocaleDateString('de-DE');
     const preview = ep.content.slice(0, 300);
@@ -1929,7 +1955,7 @@ function buildEpisodeSlot(budget: number, topic?: string, sessionId?: string): s
     text += line;
   }
 
-  if (text === '## Fruehere Sessions\n') return '';
+  if (text === '## Previous Sessions\n') return '';
   return truncateToTokens(text, budget);
 }
 
@@ -1958,14 +1984,14 @@ function buildStyleSlot(budget: number, topic?: string): string {
 
   if (relevant.length === 0) return '';
 
-  let text = '## Stil-Parameter\n';
+  let text = '## Style Parameters\n';
   for (const node of relevant) {
     const line = `- ${node.content}\n`;
     if (estimateTokens(text + line) > budget) break;
     text += line;
   }
 
-  if (text === '## Stil-Parameter\n') return '';
+  if (text === '## Style Parameters\n') return '';
   return truncateToTokens(text, budget);
 }
 
@@ -2045,7 +2071,7 @@ function buildHungerSlot(sessionId?: string): string {
     const topZone = zones[0];
     const impulse = generateSpecificImpulse(topZone.entity, topZone.entity_id);
     if (!impulse) return '';
-    return `\n[Wissensluecke: ${impulse}]\n`;
+    return `\n[Knowledge gap: ${impulse}]\n`;
   } catch { return ''; }
 }
 
@@ -2084,14 +2110,14 @@ function buildTipOfTongueSlot(budget: number, sessionTopic?: string, sessionId?:
 
   if (relevant.length === 0) return '';
 
-  let text = '## Moeglicherweise relevant\n';
+  let text = '## Possibly relevant\n';
   for (const node of relevant.slice(0, 3)) {
     const line = `- ${node.content}\n`;
     if (estimateTokens(text + line) > budget) break;
     text += line;
   }
 
-  if (text === '## Moeglicherweise relevant\n') return '';
+  if (text === '## Possibly relevant\n') return '';
   return truncateToTokens(text, budget);
 }
 
@@ -2242,8 +2268,11 @@ export function generateContext(
     if (scene) sections.push(scene);
   }
 
-  // V11-4: Life Context — IMMER wenn aktive/upcoming Life Events existieren
-  const lifeContext = buildLifeContextSlot(80);
+  // V13: Life Context — nur wenn relevant (scored)
+  const lifeEntityNames = sessionWorkingMemory
+    ? Object.keys(sessionWorkingMemory.active_entities)
+    : [];
+  const lifeContext = buildLifeContextSlot(80, currentTopic, effectiveTaskMode, lifeEntityNames);
   if (lifeContext) sections.push(lifeContext);
 
   // Working Memory
@@ -2310,7 +2339,7 @@ export function generateContext(
   const dedupedSections = deduplicateContextSections(sections);
 
   if (dedupedSections.length === 0) {
-    return 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.';
+    return 'No memories stored yet. The system learns automatically from sessions.';
   }
 
   // 11.5: Save context node IDs for Cerebellum feedback
@@ -2425,11 +2454,11 @@ function buildSceneBriefing(sessionId?: string, currentMood?: string, taskMode?:
     if (!effectiveTaskMode && (!mood || mood === 'neutral')) return null;
 
     const parts: string[] = [];
-    if (effectiveTaskMode) parts.push(`Modus: ${effectiveTaskMode}`);
-    if (mood && mood !== 'neutral') parts.push(`Stimmung: ${mood}`);
+    if (effectiveTaskMode) parts.push(`Mode: ${effectiveTaskMode}`);
+    if (mood && mood !== 'neutral') parts.push(`Mood: ${mood}`);
 
     const hour = new Date().getHours();
-    const timeOfDay = hour < 6 ? 'Nacht' : hour < 12 ? 'Morgen' : hour < 18 ? 'Nachmittag' : 'Abend';
+    const timeOfDay = hour < 6 ? 'Night' : hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Evening';
     parts.push(timeOfDay);
 
     return parts.join('. ') + '.';
@@ -2473,8 +2502,8 @@ function sectionToStructured(section: string): string | null {
     return raw || null;
   }
 
-  if (header.startsWith('Ueber ') || header.startsWith('User Profile')) {
-    const name = header.replace('Ueber ', '').replace('User Profile', '').trim() || 'User';
+  if (header.startsWith('About ') || header.startsWith('User Profile')) {
+    const name = header.replace('About ', '').replace('User Profile', '').trim() || 'User';
     const compact = bullets.map(b => {
       const colonIdx = b.indexOf(':');
       if (colonIdx > 0) return b.substring(colonIdx + 1).trim();
@@ -2483,32 +2512,32 @@ function sectionToStructured(section: string): string | null {
     return `${name}: ${compact.join(' | ')}`;
   }
 
-  if (header === 'Aktiver Kontext') {
+  if (header === 'Active Context') {
     const compact = bullets.map(b => {
       return b.replace(/^\*\*(.+?)\*\*/, '$1').replace(/\s+/g, ' ').trim();
     });
-    return `Kontext: ${compact.join(' | ')}`;
+    return `Context: ${compact.join(' | ')}`;
   }
 
-  if (header.startsWith('Zum Thema:')) {
-    const topic = header.replace('Zum Thema:', '').trim();
+  if (header.startsWith('On Topic:')) {
+    const topic = header.replace('On Topic:', '').trim();
     return `${topic}: ${bullets.join(' | ')}`;
   }
 
-  if (header === 'Offene Aufgaben') {
+  if (header === 'Open Tasks') {
     return `Tasks: ${bullets.join(' | ')}`;
   }
 
-  if (header === 'Vorsicht') {
-    return `Vorsicht: ${bullets.join(' | ')}`;
+  if (header === 'Caution') {
+    return `Caution: ${bullets.join(' | ')}`;
   }
 
-  if (header.startsWith('Hinweis: Widersprueche')) {
-    return `Widerspruch: ${bullets.join(' | ')}`;
+  if (header.startsWith('Note: Contradictions')) {
+    return `Contradiction: ${bullets.join(' | ')}`;
   }
 
-  if (header === 'Erinnerung') {
-    return `Erinnerung: ${bullets.join(' | ')}`;
+  if (header === 'Reminder') {
+    return `Reminder: ${bullets.join(' | ')}`;
   }
 
   return `${header}: ${bullets.join(' | ')}`;
@@ -2535,40 +2564,40 @@ function sectionToNarrative(section: string): string | null {
     return rest.join(' ').trim() || null;
   }
 
-  if (header.startsWith('Ueber ') || header.startsWith('User Profile')) {
+  if (header.startsWith('About ') || header.startsWith('User Profile')) {
     return buildIdentityNarrative(header, bulletPoints);
   }
-  if (header === 'Aktiver Kontext') {
+  if (header === 'Active Context') {
     return buildActiveNarrative(bulletPoints);
   }
-  if (header.startsWith('Zum Thema:')) {
+  if (header.startsWith('On Topic:')) {
     return buildGraphNarrative(header, bulletPoints);
   }
-  if (header === 'Letzte Session') {
+  if (header === 'Last Session') {
     return buildSessionNarrative(bulletPoints);
   }
-  if (header === 'Offene Aufgaben') {
+  if (header === 'Open Tasks') {
     return buildTaskNarrative(bulletPoints);
   }
-  if (header === 'Vorsicht') {
+  if (header === 'Caution') {
     return buildWarningNarrative(bulletPoints);
   }
-  if (header === 'Erinnerung') {
-    return 'Erinnerung: ' + bulletPoints.join('. ') + '.';
+  if (header === 'Reminder') {
+    return 'Reminder: ' + bulletPoints.join('. ') + '.';
   }
-  if (header.startsWith('Hinweis: Widersprueche')) {
-    return 'Achtung, Widerspruch: ' + bulletPoints.join('. ') + '. Klaere welche Info aktuell ist.';
+  if (header.startsWith('Note: Contradictions')) {
+    return 'Warning, contradiction: ' + bulletPoints.join('. ') + '. Clarify which info is current.';
   }
-  if (header === 'Moeglicherweise relevant') {
-    return 'Vielleicht auch relevant: ' + bulletPoints.join(', ') + '.';
+  if (header === 'Possibly relevant') {
+    return 'Possibly also relevant: ' + bulletPoints.join(', ') + '.';
   }
 
   return bulletPoints.join('. ') + '.';
 }
 
 function buildIdentityNarrative(header: string, points: string[]): string {
-  const name = header.replace('Ueber ', '').replace('User Profile', '').trim() || 'der User';
-  const sentences: string[] = [`Du sprichst mit ${name}.`];
+  const name = header.replace('About ', '').replace('User Profile', '').trim() || 'the user';
+  const sentences: string[] = [`You are talking to ${name}.`];
 
   for (const point of points) {
     const colonIdx = point.indexOf(':');
@@ -2597,7 +2626,7 @@ function buildActiveNarrative(points: string[]): string {
       const extra = entityMatch[2].trim();
       if (extra.includes('\u2192')) {
         const connected = extra.replace(/^.*?\u2192\s*/, '').trim();
-        parts.push(`${name} (verbunden mit ${connected})`);
+        parts.push(`${name} (connected to ${connected})`);
       } else {
         parts.push(name + (extra ? ' ' + extra : ''));
       }
@@ -2607,11 +2636,11 @@ function buildActiveNarrative(points: string[]): string {
     }
   }
 
-  return 'Aktuell relevant: ' + parts.join('. ') + '.';
+  return 'Currently relevant: ' + parts.join('. ') + '.';
 }
 
 function buildGraphNarrative(header: string, points: string[]): string {
-  const topic = header.replace('Zum Thema:', '').trim();
+  const topic = header.replace('On Topic:', '').trim();
   const relations: string[] = [];
 
   for (const point of points) {
@@ -2626,7 +2655,7 @@ function buildGraphNarrative(header: string, points: string[]): string {
   }
 
   if (relations.length === 0) return '';
-  return `Zum Thema ${topic}: ${relations.join(', ')}.`;
+  return `On ${topic}: ${relations.join(', ')}.`;
 }
 
 function buildSessionNarrative(points: string[]): string {
@@ -2635,28 +2664,28 @@ function buildSessionNarrative(points: string[]): string {
   let topics = '';
 
   for (const point of points) {
-    if (point.startsWith('Stimmung:')) mood = point.replace('Stimmung:', '').trim();
-    else if (point.startsWith('Produktivitaet:')) productivity = point.replace('Produktivitaet:', '').trim();
-    else if (point.startsWith('Themen:')) topics = point.replace('Themen:', '').trim();
+    if (point.startsWith('Mood:')) mood = point.replace('Mood:', '').trim();
+    else if (point.startsWith('Productivity:')) productivity = point.replace('Productivity:', '').trim();
+    else if (point.startsWith('Topics:')) topics = point.replace('Topics:', '').trim();
   }
 
-  const parts: string[] = ['Letzte Session'];
-  if (mood) parts.push(`war ${mood}`);
-  if (productivity) parts.push(`und ${productivity === 'hoch' ? 'produktiv' : productivity === 'niedrig' ? 'wenig produktiv' : 'mittelmaessig produktiv'}`);
+  const parts: string[] = ['Last session'];
+  if (mood) parts.push(`was ${mood}`);
+  if (productivity) parts.push(`and ${productivity === 'high' ? 'productive' : productivity === 'low' ? 'unproductive' : 'moderately productive'}`);
   let sentence = parts.join(' ') + '.';
-  if (topics) sentence += ` Themen: ${topics}.`;
+  if (topics) sentence += ` Topics: ${topics}.`;
   return sentence;
 }
 
 function buildTaskNarrative(points: string[]): string {
   const tasks = points.map(p => {
-    if (p.startsWith('!!')) return p.slice(2).trim() + ' (hohe Prioritaet)';
-    if (p.startsWith('!')) return p.slice(1).trim() + ' (Prioritaet)';
+    if (p.startsWith('!!')) return p.slice(2).trim() + ' (high priority)';
+    if (p.startsWith('!')) return p.slice(1).trim() + ' (priority)';
     return p;
   });
-  return 'Offene Aufgaben: ' + tasks.join(', ') + '.';
+  return 'Open tasks: ' + tasks.join(', ') + '.';
 }
 
 function buildWarningNarrative(points: string[]): string {
-  return 'Vorsicht: ' + points.join('. ') + '.';
+  return 'Caution: ' + points.join('. ') + '.';
 }

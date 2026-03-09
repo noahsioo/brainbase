@@ -101,16 +101,16 @@ export function generateSpecificImpulse(entity: string, entityId: string): strin
   const hasSkill = edgeTypes.has('knows') || edgeTypes.has('has_skill') || edgeTypes.has('interested_in');
 
   if (edges.length === 0) {
-    return `"${entity}" wurde erwaehnt — mehr Kontext wuerde dem System helfen.`;
+    return `"${entity}" was mentioned — more context would help the system.`;
   }
   if (!hasContext && !hasUses) {
-    return `In welchem Zusammenhang steht "${entity}"?`;
+    return `What is the context for "${entity}"?`;
   }
   if (hasUses && !hasPrefers) {
-    return `"${entity}" wird genutzt — gibt es bestimmte Praeferenzen oder Besonderheiten?`;
+    return `"${entity}" is used — any specific preferences or details?`;
   }
   if (!hasSkill && edges.length >= 2) {
-    return `Wie tief ist die Erfahrung mit "${entity}"?`;
+    return `How deep is the experience with "${entity}"?`;
   }
 
   return null;

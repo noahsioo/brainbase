@@ -50,17 +50,6 @@ function extractExampleContent(message: string): string | null {
     if (quoted.length >= 50) return quoted;
   }
 
-  // If the message itself is long and structured (the user IS the example)
-  // Strip the trigger phrase and any intro sentence before the actual content
-  let cleanMsg = message.replace(EXAMPLE_TRIGGERS, '').trim();
-  // Remove leading "wie ich X schreibe:" type intros
-  cleanMsg = cleanMsg.replace(/^[^:\n]{0,80}:\s*/m, '').trim();
-  if (cleanMsg.length >= 200 && cleanMsg.length <= 2000) {
-    // Check it has some structure (multiple sentences or lines)
-    const sentences = cleanMsg.split(/[.!?\n]/).filter(s => s.trim().length > 10);
-    if (sentences.length >= 2) return cleanMsg;
-  }
-
   return null;
 }
 
