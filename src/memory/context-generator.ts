@@ -1187,13 +1187,50 @@ function buildActiveContextSlot(budget: number, sessionTopic?: string, mood?: st
 
 // ── Session Momentum (unchanged) ────────────────────────────
 
-function buildSessionMomentumSlot(budget: number): string {
+function normalizeTopicTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9._+-]+/i)
+    .map(token => token.trim())
+    .filter(token => token.length >= 3)
+    .filter(token => !['with', 'und', 'der', 'die', 'das', 'the', 'auth'].includes(token));
+}
+
+function isSessionMomentumRelevant(currentTopic: string | undefined, sessionTopics: string[]): boolean {
+  if (!currentTopic) return false;
+
+  const currentTokens = new Set(normalizeTopicTokens(currentTopic));
+  if (currentTokens.size === 0) return false;
+
+  for (const topic of sessionTopics) {
+    for (const token of normalizeTopicTokens(topic)) {
+      if (currentTokens.has(token)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function buildSessionMomentumSlot(budget: number, currentTopic?: string, sessionId?: string): string {
   const db = getDb();
   const lastSession = db.prepare(
     'SELECT * FROM sessions WHERE ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1'
   ).get() as { mood_end: string | null; productivity: number | null; topics: string } | undefined;
 
   if (!lastSession) return '';
+
+  let parsedTopics: string[] = [];
+  try {
+    parsedTopics = JSON.parse(lastSession.topics);
+  } catch {
+    parsedTopics = [];
+  }
+
+  if (sessionId && !isSessionMomentumRelevant(currentTopic, parsedTopics)) {
+    return '';
+  }
 
   let text = '## Letzte Session\n';
 
@@ -1206,13 +1243,8 @@ function buildSessionMomentumSlot(budget: number): string {
     text += `- Produktivitaet: ${prodLabel}\n`;
   }
 
-  try {
-    const topics = JSON.parse(lastSession.topics);
-    if (Array.isArray(topics) && topics.length > 0) {
-      text += `- Themen: ${topics.join(', ')}\n`;
-    }
-  } catch {
-    // skip
+  if (parsedTopics.length > 0) {
+    text += `- Themen: ${parsedTopics.join(', ')}\n`;
   }
 
   return truncateToTokens(text, budget);
@@ -2245,7 +2277,7 @@ export function generateContext(
 
   // Session Momentum — nur bei Session-Start
   if (slots.showMomentum) {
-    const momentum = buildSessionMomentumSlot(budget.sessionMomentum);
+    const momentum = buildSessionMomentumSlot(budget.sessionMomentum, currentTopic, sessionId);
     if (momentum) sections.push(momentum);
   }
 
