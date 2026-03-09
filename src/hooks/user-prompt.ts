@@ -835,32 +835,69 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   };
 }
 
-// V16: Context Bridge — frame knowledge as response to user's question, not standalone dump
-function frameContextAsResponse(userMessage: string, rawContext: string, topic: string): string {
-  const isResumption = /wo war ich|where was i|stehen geblieben|left off|weiter ?machen|continue from|anderer chat|other chat|abgest[uü]rzt|crashed|letztes mal|last time/i.test(userMessage);
-  const isQuestion = /\?|was |wie |welch|warum|wieso|what |how |which|why /i.test(userMessage);
-  const isGreeting = /^(hey|hi|hallo|yo|moin|lass|ok )/i.test(userMessage.trim());
+// V18: User-Voice Context — builds additionalContext that gets appended to user message
+function buildUserVoiceContext(
+  userMessage: string,
+  rawContext: string,
+  topic: string,
+): string | null {
+  const facts = extractCleanFacts(rawContext);
+  if (facts.length === 0) return null;
 
-  let frame: string;
+  const distilled = distillToNarrative(facts, topic, userMessage);
+  if (!distilled) return null;
+
+  const isResumption = /wo war|stehen geblieben|left off|weiter|continue|letztes mal|last time/i.test(userMessage);
+  const isQuestion = /\?|was |wie |welch|warum|what |how |which|why /i.test(userMessage);
+
+  let augmented: string;
   if (isResumption) {
-    frame = `I'm continuing work on "${topic}". Here's what we discussed before:\n`;
+    augmented = `${distilled}\nMach da weiter wo wir waren.`;
   } else if (isQuestion) {
-    frame = `I'm asking about ${topic}. Here's what I've told you before:\n`;
-  } else if (isGreeting) {
-    frame = `Here's what you know about me from previous conversations:\n`;
+    augmented = `${distilled}\nNutze das was du ueber mich weisst.`;
   } else {
-    frame = `About ${topic} — from our previous conversations:\n`;
+    augmented = distilled;
   }
 
-  const facts = extractCleanFacts(rawContext);
-  if (facts.length === 0) return rawContext; // fallback to raw if no clean facts
+  return `<user-context verified="true">\n${augmented}\n</user-context>`;
+}
 
-  const body = facts.slice(0, 5).map(f => `- ${f}`).join('\n');
-  const instruction = isResumption
-    ? 'Continue where we left off.'
-    : 'Use this in your response.';
+// V18: Distill facts into 1-3 narrative sentences (high signal density)
+function distillToNarrative(
+  facts: string[],
+  topic: string,
+  userMessage: string,
+): string | null {
+  if (facts.length === 0) return null;
 
-  return `${frame}${body}\n${instruction} Don't ask me about any of the above.`;
+  // Semantic Echo: mirror keywords from user message at the start
+  const topKeywords = extractTopKeywords(userMessage);
+  const keywordPrefix = topKeywords.length > 0 ? topKeywords[0] + ' — ' : '';
+
+  // Max 3 most important facts, combined into narrative sentences
+  const topFacts = facts.slice(0, 3);
+  const narrative = topFacts.join('. ') + '.';
+
+  // Recency: topic at the end (Recency Bias)
+  if (topic && topic !== 'general' && !narrative.toLowerCase().includes(topic.toLowerCase())) {
+    return `${keywordPrefix}${narrative} Aktuelles Thema: ${topic}.`;
+  }
+
+  return keywordPrefix ? `${keywordPrefix}${narrative}` : narrative;
+}
+
+// V18: Extract top keywords from user message for Semantic Echo
+function extractTopKeywords(message: string): string[] {
+  const stopWords = /^(diese|dieser|dieses|meine|meinem|meinen|einen|keine|nicht|wegen|damit|schon|gerade|einfach|eigentlich|vielleicht|waren|stehen|geblieben|where|were|what|with|about|have|been|just|some|this|that|from|will|would|could|should)$/i;
+  const words = message
+    .split(/\s+/)
+    .filter(w => w.length > 4 && !stopWords.test(w));
+
+  // Proper nouns (capitalized) get priority
+  const proper = words.filter(w => /^[A-Z]/.test(w) && !/^(Ich|Du|Wir|Sie|Er|Das|Die|Der|Hey|Hallo|Okay)$/.test(w));
+  if (proper.length > 0) return proper.slice(0, 2);
+
+  return words.slice(0, 2);
 }
 
 function extractCleanFacts(rawContext: string): string[] {
