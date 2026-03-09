@@ -1338,7 +1338,8 @@ function buildEntityGraphSlot(budget: number, topic?: string, sessionId?: string
   }
 
   // 2-hop for strong entity connections
-  const strongNeighbors = neighbors.filter(n => n.edge.strength > 0.6 && n.node.type === 'entity');
+  // V9-5: Tiefere Traversierung — niedrigerer Threshold (0.3 statt 0.6)
+  const strongNeighbors = neighbors.filter(n => n.edge.strength > 0.3 && n.node.type === 'entity');
   for (const { node: neighbor } of strongNeighbors.slice(0, 3)) {
     const hop2Edges = getEdgesForNode(neighbor.id);
     const rankedHop2 = hop2Edges
@@ -1348,7 +1349,8 @@ function buildEntityGraphSlot(budget: number, topic?: string, sessionId?: string
         return { edge2, otherId, other };
       })
       .filter((entry): entry is { edge2: typeof hop2Edges[number]; otherId: string; other: Node } =>
-        Boolean(entry.other && entry.other.type === 'entity'),
+        // V9-5: Auch Facts/Preferences bei 2-Hop zeigen, nicht nur Entities
+        Boolean(entry.other && entry.other.type !== 'auto_topic' && entry.other.type !== 'disambiguator' && entry.other.type !== 'core'),
       )
       .sort((a, b) => {
         const scoreA = a.edge2.strength
@@ -2256,7 +2258,10 @@ export function generateContext(
     if (conflicts) sections.push(conflicts);
   }
 
-  if (sections.length === 0) {
+  // V9-6: Dedup-Pass — entfernt doppelte Informationen zwischen Slots
+  const dedupedSections = deduplicateContextSections(sections);
+
+  if (dedupedSections.length === 0) {
     return 'Noch keine Memories gespeichert. Das System lernt automatisch aus Sessions.';
   }
 
@@ -2283,12 +2288,49 @@ export function generateContext(
     try { savePrediction(contextNodeIdList.slice(0, 30), currentTopic, sessionId); } catch { /* non-fatal */ }
   }
 
-  return integrateContext(sections, contextStyle, maxChunks, sessionId, effectiveCurrentMood, effectiveTaskMode);
+  return integrateContext(dedupedSections, contextStyle, maxChunks, sessionId, effectiveCurrentMood, effectiveTaskMode);
 }
 
 export function getContextTokenCount(mode: DetailMode = 'STANDARD'): number {
   const context = generateContext(mode);
   return estimateTokens(context);
+}
+
+// V9-6: Context Deduplication — gleiche Info nicht in mehreren Slots
+function deduplicateContextSections(sections: string[]): string[] {
+  const seenContentKeys = new Set<string>();
+
+  return sections.map(section => {
+    const lines = section.split('\n');
+    const filtered = lines.filter(line => {
+      const trimmed = line.replace(/^[-*\s#]+/, '').trim();
+      if (!trimmed || trimmed.startsWith('##')) return true;
+
+      const contentKey = trimmed.toLowerCase()
+        .replace(/[^a-z\u00e4\u00f6\u00fc\u00df\s]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (contentKey.length < 10) return true;
+
+      const words = new Set(contentKey.split(' ').filter(w => w.length > 2));
+      if (words.size < 3) return true;
+
+      for (const seen of seenContentKeys) {
+        const seenWords = new Set(seen.split(' ').filter(w => w.length > 2));
+        const intersection = [...words].filter(w => seenWords.has(w)).length;
+        const overlap = intersection / Math.min(words.size, seenWords.size);
+        if (overlap > 0.7) return false;
+      }
+
+      seenContentKeys.add(contentKey);
+      return true;
+    });
+
+    return filtered.join('\n');
+  }).filter(section => {
+    const sectionContent = section.replace(/^##[^\n]*\n?/gm, '').trim();
+    return sectionContent.length > 0;
+  });
 }
 
 // ── Narrative Briefing ──────────────────────────────────────

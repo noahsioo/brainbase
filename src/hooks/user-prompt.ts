@@ -293,6 +293,11 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     ? applyTaskSwitchingCost(sessionId, provisionalTopic)
     : false;
 
+  // V9-5: Topic-Wechsel → theta mode fuer tiefere Activation (3-Hop statt 2)
+  if (shouldPersistState && topicChanged) {
+    setSystemMode('theta', sessionId);
+  }
+
   // 12.1: Event Boundary — topic change = episode boundary
   if (shouldPersistState && topicChanged) {
     markEventBoundary(sessionId);
