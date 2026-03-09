@@ -34,6 +34,7 @@ import {
   setSessionTone,
 } from '../memory/session-runtime-state.js';
 import { diagnosticLog } from '../utils/diagnostic.js';
+import { toFirstPerson, isCleanUserFact } from '../utils/first-person.js';
 import { createSignalAccumulator } from '../utils/signal-accumulator.js';
 import { detectHungerZones, getHungerCooldown, setHungerCooldown, decrementHungerCooldown, detectLearningOpportunity } from '../memory/knowledge-hunger.js';
 
@@ -512,6 +513,23 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
       taskMode: signal.taskMode,
       mood,
     });
+
+    // V19: WM Snapshot alle 3 Nachrichten — ueberlebt Session-Crashes
+    const wmForSnapshot = getWorkingMemory(sessionId);
+    const snapMsgCount = wmForSnapshot?.message_count ?? 0;
+    if (snapMsgCount > 0 && snapMsgCount % 3 === 0) {
+      try {
+        getDb().prepare(
+          "INSERT OR REPLACE INTO system_state (key, value, updated_at) VALUES (?, ?, ?)"
+        ).run('wm_snapshot', JSON.stringify({
+          topic: wmForSnapshot?.current_topic,
+          summary: wmForSnapshot?.conversation_summary,
+          last_message: wmForSnapshot?.last_user_message,
+          entities: Object.entries(wmForSnapshot?.active_entities || {}).slice(0, 5),
+          session_id: sessionId,
+        }), Date.now());
+      } catch { /* non-fatal */ }
+    }
   }
   {
     const wmForLog = getWorkingMemory(sessionId);
@@ -835,13 +853,20 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
   };
 }
 
-// V18: User-Voice Context — builds additionalContext that gets appended to user message
+// V19: User-Voice Context — builds additionalContext that gets appended to user message
 function buildUserVoiceContext(
   userMessage: string,
   rawContext: string,
   topic: string,
 ): string | null {
-  const facts = extractCleanFacts(rawContext);
+  // Try extracting from formatted context first
+  let facts = extractCleanFacts(rawContext);
+
+  // V19: Fallback — direkt aus DB lesen wenn extractCleanFacts nichts findet
+  if (facts.length === 0) {
+    facts = getDirectFacts(topic);
+  }
+
   if (facts.length === 0) return null;
 
   const distilled = distillToNarrative(facts, topic);
@@ -860,6 +885,56 @@ function buildUserVoiceContext(
   }
 
   return `<user-context verified="true">\n${augmented}\n</user-context>`;
+}
+
+// V19: Direct DB facts — bypasses the broken extractCleanFacts filter
+function getDirectFacts(topic: string): string[] {
+  try {
+    const db = getDb();
+    const userName = getUserNameForFacts();
+    const results: string[] = [];
+
+    // 1. Topic-relevante Nodes
+    if (topic && topic !== 'general') {
+      const topicWords = topic.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      if (topicWords.length > 0) {
+        const likeClause = topicWords.map(() => "LOWER(content) LIKE ?").join(' OR ');
+        const params = topicWords.map(w => `%${w}%`);
+        const topicNodes = db.prepare(`
+          SELECT content FROM nodes
+          WHERE type IN ('fact', 'preference', 'decision', 'workflow')
+          AND (${likeClause})
+          AND LENGTH(content) BETWEEN 20 AND 150
+          ORDER BY importance DESC, activation_count DESC LIMIT 3
+        `).all(...params) as Array<{ content: string }>;
+
+        for (const n of topicNodes) {
+          const converted = toFirstPerson(n.content, userName);
+          if (isCleanUserFact(converted)) results.push(converted);
+        }
+      }
+    }
+
+    // 2. Top-Knowledge auffuellen (max 5 total)
+    if (results.length < 3) {
+      const topFacts = db.prepare(
+        `SELECT content FROM nodes
+         WHERE type IN ('fact', 'preference', 'identity')
+         AND LENGTH(content) BETWEEN 15 AND 150
+         ORDER BY importance DESC, activation_count DESC LIMIT 5`
+      ).all() as Array<{ content: string }>;
+
+      for (const n of topFacts) {
+        if (results.length >= 5) break;
+        const converted = toFirstPerson(n.content, userName);
+        if (isCleanUserFact(converted) && !results.includes(converted)) {
+          results.push(converted);
+        }
+      }
+    }
+
+    return results;
+  } catch { return []; }
 }
 
 // V18: Distill facts into 1-3 narrative sentences (high signal density)
@@ -928,26 +1003,22 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<void> {
       provider: 'claude-code',
     });
 
-    if (result.context) {
-      const ctx = result.context;
+    const output: Record<string, unknown> = {};
+    const topic = result.topic || 'general';
+    const ctx = result.context || '';
 
-      // V18: CLAUDE.md refresh removed — only at SessionStart + PreCompact now
+    // V19: ALWAYS try to build additionalContext — even if generateContext returned null
+    // getDirectFacts() queries DB directly and doesn't depend on generateContext output
+    const userVoiceContext = buildUserVoiceContext(input.user_prompt, ctx, topic);
+    if (userVoiceContext) {
+      output.hookSpecificOutput = {
+        hookEventName: 'UserPromptSubmit' as const,
+        additionalContext: userVoiceContext,
+      };
+    }
 
-      const output: Record<string, unknown> = {};
-      const topic = result.topic || 'general';
-
-      // V18 TIER 2: Dynamic context → additionalContext (appended to user message!)
-      // This is THE fundamental fix: additionalContext becomes part of the user message,
-      // not a system-reminder that can be ignored.
-      const userVoiceContext = buildUserVoiceContext(input.user_prompt, ctx, topic);
-      if (userVoiceContext) {
-        output.hookSpecificOutput = {
-          hookEventName: 'UserPromptSubmit' as const,
-          additionalContext: userVoiceContext,
-        };
-      }
-
-      // Reminders stay as visible systemMessage (non-critical, user wants to see these)
+    // Reminders stay as visible systemMessage (non-critical, user wants to see these)
+    if (ctx) {
       const hasReminders =
         ctx.includes('Reminder for me:') ||
         ctx.includes('Coming up soon:') ||
@@ -967,10 +1038,10 @@ export async function handleUserPrompt(input: UserPromptInput): Promise<void> {
           output.systemMessage = reminderSections.join('\n');
         }
       }
+    }
 
-      if (output.systemMessage || output.hookSpecificOutput) {
-        process.stdout.write(JSON.stringify(output));
-      }
+    if (output.systemMessage || output.hookSpecificOutput) {
+      process.stdout.write(JSON.stringify(output));
     }
   } catch {
     // Silent fail - don't break the user's workflow

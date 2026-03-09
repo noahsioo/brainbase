@@ -335,6 +335,60 @@ function getLastSessionSummary(): string | null {
       ORDER BY ended_at DESC LIMIT 1
     `).get() as { id: string; message_count: number; topics: string; started_at: number; ended_at: number; summary: string | null } | undefined;
 
+    // V19: Check for crashed sessions (ended_at IS NULL, most recent)
+    const crashedSession = db.prepare(`
+      SELECT id, message_count, topics, started_at
+      FROM sessions WHERE ended_at IS NULL
+      ORDER BY started_at DESC LIMIT 1
+    `).get() as { id: string; message_count: number; topics: string; started_at: number } | undefined;
+
+    // V19: If crashed session is newer than last completed AND has messages → use it
+    const useCrashed = crashedSession &&
+      crashedSession.message_count > 0 &&
+      (!lastSession || crashedSession.started_at > lastSession.started_at);
+
+    if (useCrashed && crashedSession) {
+      const parts: string[] = [];
+      parts.push(`Last session: ${crashedSession.message_count} messages (interrupted).`);
+
+      // Try WM snapshot first (most structured data)
+      const wmSnapshot = db.prepare(
+        "SELECT value FROM system_state WHERE key = 'wm_snapshot'"
+      ).get() as { value: string } | undefined;
+      if (wmSnapshot) {
+        try {
+          const snap = JSON.parse(wmSnapshot.value) as { topic?: string; summary?: string; session_id?: string };
+          if (snap.session_id === crashedSession.id) {
+            if (snap.topic) parts.push(`Topic: ${snap.topic}`);
+            if (snap.summary) parts.push(snap.summary);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Fallback: read last messages from raw_buffer
+      if (parts.length <= 1) {
+        const messages = db.prepare(
+          "SELECT content FROM raw_buffer WHERE session_id = ? ORDER BY timestamp DESC LIMIT 3"
+        ).all(crashedSession.id) as Array<{ content: string }>;
+        if (messages.length > 0) {
+          const lastMsg = messages[0].content;
+          const truncated = lastMsg.length > 100 ? lastMsg.substring(0, 100) + '...' : lastMsg;
+          parts.push(`Last exchange: "${truncated}"`);
+        }
+      }
+
+      // Try topics from session
+      try {
+        const topics = JSON.parse(crashedSession.topics) as string[];
+        if (topics.length > 0 && !parts.some(p => p.startsWith('Topic:'))) {
+          parts.push(`Topics: ${topics.slice(0, 3).join(', ')}`);
+        }
+      } catch { /* no topics */ }
+
+      if (parts.length > 1) return parts.join('\n');
+      // Fall through to completed session if crashed session has no useful data
+    }
+
     if (!lastSession) return null;
 
     const parts: string[] = [];
