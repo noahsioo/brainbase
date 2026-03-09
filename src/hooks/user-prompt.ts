@@ -815,10 +815,20 @@ export async function processMessage(input: ProcessMessageInput): Promise<Proces
     } catch { /* non-fatal */ }
   }
 
-  if (watcherSystemMessage && finalContext) {
-    finalContext = finalContext + '\n' + watcherSystemMessage;
-  } else if (watcherSystemMessage) {
-    finalContext = watcherSystemMessage;
+  // V14: Warm memory integrates INSIDE the IMPORTANT wrapper, not after it
+  if (watcherSystemMessage) {
+    if (finalContext) {
+      // Insert warm memory before the closing IMPORTANT line
+      const closingLine = '\n\nIMPORTANT: The above is VERIFIED knowledge';
+      const closingIdx = finalContext.indexOf(closingLine);
+      if (closingIdx > 0) {
+        finalContext = finalContext.substring(0, closingIdx) + '\n\n' + watcherSystemMessage + finalContext.substring(closingIdx);
+      } else {
+        finalContext = finalContext + '\n\n' + watcherSystemMessage;
+      }
+    } else {
+      finalContext = `IMPORTANT — Verified knowledge about this user:\n\n${watcherSystemMessage}\n\nIMPORTANT: The above is VERIFIED knowledge from previous conversations. Use it proactively. NEVER re-ask for information already stated above.`;
+    }
   }
 
   const isEmpty = !finalContext || finalContext === 'No memories stored yet. The system learns automatically from sessions.';

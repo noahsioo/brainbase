@@ -184,16 +184,28 @@ function getIdentityFacts(): string[] {
     ).all() as Array<{ content: string }>;
     if (identityNodes.length > 0) return identityNodes.map(n => n.content);
 
-    // 2. Fallback: Core-linked Entities (User Identity, Current Project, Tech Stack)
-    const coreLinked = db.prepare(`
-      SELECT DISTINCT n2.content FROM nodes n1
-      JOIN edges e ON n1.id = e.source_id
-      JOIN nodes n2 ON e.target_id = n2.id
-      WHERE n1.type = 'core' AND n1.content IN ('User Identity', 'Current Project', 'Tech Stack')
-      AND n2.type = 'entity' AND LENGTH(n2.content) BETWEEN 3 AND 50
-      ORDER BY n2.importance DESC LIMIT 5
-    `).all() as Array<{ content: string }>;
-    return coreLinked.map(n => n.content).filter(c => !SESSION_GARBAGE_WORDS.has(c.toLowerCase()));
+    // 2. Fallback: Graph-basierte Identity (was ist mit dem User verknuepft?)
+    const userName = getUserName();
+    if (userName !== 'User') {
+      const linked = db.prepare(`
+        SELECT n2.content, e.strength FROM nodes n1
+        JOIN edges e ON n1.id = e.source_id
+        JOIN nodes n2 ON e.target_id = n2.id
+        WHERE n1.content = ? AND n1.type = 'entity'
+        AND n2.type = 'entity' AND LENGTH(n2.content) BETWEEN 3 AND 40
+        AND e.strength >= 0.5
+        ORDER BY e.strength DESC LIMIT 5
+      `).all(userName) as Array<{ content: string; strength: number }>;
+      const projects = linked
+        .map(l => l.content)
+        .filter(c => !SESSION_GARBAGE_WORDS.has(c.toLowerCase()) && c.length > 2)
+        .filter(c => !/^gpt-|^o[1-9]|^claude|^GPT/i.test(c));
+      if (projects.length > 0) {
+        return projects.slice(0, 3);
+      }
+    }
+
+    return [];
   } catch { return []; }
 }
 
@@ -214,9 +226,11 @@ function getTopKnowledge(): string[] {
 function isCleanFact(content: string): boolean {
   if (content.includes('\u2192') || content.includes('|')) return false;
   if (content.includes('erkennt') && content.includes('als Entity')) return false;
-  const words = content.split(/\s+/).filter(w => w.length > 2);
-  if (words.length < 3) return false;
   if (content.startsWith('->') || content.startsWith('//')) return false;
+  const words = content.split(/\s+/).filter(w => w.length > 2);
+  if (words.length < 4) return false;
+  // Fragments die mit deutschem Kleinbuchstabe starten (abgebrochene Saetze)
+  if (/^[a-zäöü]/.test(content) && !content.includes(':')) return false;
   return true;
 }
 
@@ -383,6 +397,9 @@ const SESSION_GARBAGE_WORDS = new Set([
   'habe', 'hatte', 'zuletzt', 'gemacht', 'gesagt', 'gemeint',
   'vorher', 'vorhin', 'davor', 'danach', 'dabei',
   'baue', 'neue', 'neues', 'neuen', 'neuer',
+  'wieso', 'warum', 'schwach', 'grundlegende', 'grundlegend',
+  'verstehen', 'versteht', 'crazy', 'sozusagen', 'funktioniert',
+  'irgendwie', 'irgendwas', 'verschiedene', 'verschiedenen',
 ]);
 
 function isGarbageWord(word: string): boolean {

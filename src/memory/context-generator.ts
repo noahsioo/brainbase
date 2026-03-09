@@ -43,11 +43,12 @@ export function getUserName(): string {
     ).get() as { content: string } | undefined;
     if (identityCore) return identityCore.content;
 
-    // 3. Haeufigste kurze Entity mit Grossbuchstabe (wahrscheinlich ein Name)
-    const frequent = db.prepare(
-      "SELECT content FROM nodes WHERE type = 'entity' AND LENGTH(content) BETWEEN 3 AND 20 AND activation_count > 5 ORDER BY activation_count DESC LIMIT 1"
-    ).get() as { content: string } | undefined;
-    if (frequent && /^[A-Z]/.test(frequent.content)) return frequent.content;
+    // 3. Wichtigste kurze Entity — Name-Heuristik (Grossbuchstabe, einzelnes Wort, kein Tool)
+    const candidates = db.prepare(
+      "SELECT content FROM nodes WHERE type = 'entity' AND LENGTH(content) BETWEEN 3 AND 15 AND activation_count > 5 AND importance >= 0.8 ORDER BY importance DESC, activation_count DESC LIMIT 10"
+    ).all() as Array<{ content: string }>;
+    const nameCandidate = candidates.find(c => /^[A-Z][a-z]+$/.test(c.content) && c.content !== 'User');
+    if (nameCandidate) return nameCandidate.content;
 
     return 'User';
   } catch { return 'User'; }
@@ -2537,12 +2538,12 @@ function sectionToStructured(section: string): string | null {
     const compact = bullets.map(b => {
       return b.replace(/^\*\*(.+?)\*\*/, '$1').replace(/\s+/g, ' ').trim();
     });
-    return `Context: ${compact.join(' | ')}`;
+    return `You know: ${compact.join(' | ')}`;
   }
 
   if (header.startsWith('On Topic:')) {
     const topic = header.replace('On Topic:', '').trim();
-    return `${topic}: ${bullets.join(' | ')}`;
+    return `About ${topic}: ${bullets.join(' | ')}`;
   }
 
   if (header === 'Open Tasks') {
