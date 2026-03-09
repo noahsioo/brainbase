@@ -28,6 +28,16 @@ import {
 
 export type DetailMode = 'MAXIMUM' | 'STANDARD' | 'LIGHT' | 'MINIMAL';
 
+export function getUserName(): string {
+  try {
+    const db = getDb();
+    const person = db.prepare(
+      "SELECT content FROM nodes WHERE type = 'entity' AND metadata LIKE '%\"entity_type\":\"person\"%' ORDER BY importance DESC, activation_count DESC LIMIT 1"
+    ).get() as { content: string } | undefined;
+    return person?.content || 'User';
+  } catch { return 'User'; }
+}
+
 // 15.2: Module-level mode for JOL filtering in slot functions
 let _currentMode: DetailMode = 'STANDARD';
 
@@ -905,32 +915,24 @@ function buildWorkingMemorySlot(budget: number, sessionId?: string): string {
     lines.push(summary);
   }
 
-  if (memory.degraded_semantic) {
-    lines.push('Semantics currently degraded');
-  }
-
   if (displayReference) {
-    lines.push(`Active reference: ${displayReference}`);
-  }
-
-  if (memory.context_stack.length > 0) {
-    lines.push(`Context: ${memory.context_stack.slice(0, 4).join(' -> ')}`);
+    lines.push(`Verweis: ${displayReference}`);
   }
 
   if (memory.open_questions.length > 0) {
-    lines.push(`Open: ${memory.open_questions.slice(0, 2).join(' | ')}`);
+    lines.push(`Offen: ${memory.open_questions.slice(0, 2).join(' | ')}`);
   }
 
   if (lines.length === 0) return '';
 
-  let text = '## Working Memory\n';
+  let text = '';
   for (const line of lines) {
-    const nextLine = `- ${line}\n`;
+    const nextLine = `${line}\n`;
     if (estimateTokens(text + nextLine) > budget) break;
     text += nextLine;
   }
 
-  if (text === '## Working Memory\n') return '';
+  if (!text.trim()) return '';
   return truncateToTokens(text, budget);
 }
 
@@ -2424,11 +2426,9 @@ function integrateContext(
 
   const chunks: string[] = [];
 
-  // V3 7.7: Scene Construction — kohaerentes Szenen-Briefing
-  if (style === 'narrative' || style === 'structured') {
-    const scene = buildSceneBriefing(sessionId, currentMood, taskMode);
-    if (scene) chunks.push(scene);
-  }
+  // Scene header — compact, directive
+  const scene = buildSceneBriefing(sessionId, currentMood, taskMode);
+  if (scene) chunks.push(scene);
 
   for (const section of sections) {
     if (style === 'minimal') {
@@ -2443,25 +2443,32 @@ function integrateContext(
     }
   }
 
-  return chunks.slice(0, maxChunks).join('\n\n');
+  const body = chunks.slice(0, maxChunks).join('\n\n');
+
+  return body + '\n\nYou KNOW the above. Use it naturally. NEVER ask for information already provided here.';
 }
 
 function buildSceneBriefing(sessionId?: string, currentMood?: string, taskMode?: string): string | null {
   try {
     const mood = currentMood ?? getSessionMood(sessionId);
     const effectiveTaskMode = taskMode ?? getSessionTaskMode(sessionId) ?? undefined;
+    const userName = getUserName();
 
-    if (!effectiveTaskMode && (!mood || mood === 'neutral')) return null;
-
-    const parts: string[] = [];
-    if (effectiveTaskMode) parts.push(`Mode: ${effectiveTaskMode}`);
-    if (mood && mood !== 'neutral') parts.push(`Mood: ${mood}`);
+    const moodLabels: Record<string, string> = {
+      frustrated: 'frustriert', excited: 'motiviert', confused: 'unsicher',
+      satisfied: 'zufrieden', neutral: 'fokussiert',
+    };
+    const moodStr = moodLabels[mood || 'neutral'] || '';
 
     const hour = new Date().getHours();
-    const timeOfDay = hour < 6 ? 'Night' : hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Evening';
+    const timeOfDay = hour < 6 ? 'Nacht' : hour < 12 ? 'Morgens' : hour < 18 ? 'Nachmittags' : 'Abends';
+
+    const parts: string[] = [userName];
+    if (moodStr) parts.push(moodStr);
+    if (effectiveTaskMode) parts.push(effectiveTaskMode);
     parts.push(timeOfDay);
 
-    return parts.join('. ') + '.';
+    return parts.join(' | ');
   } catch { return null; }
 }
 

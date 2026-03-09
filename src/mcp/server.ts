@@ -189,7 +189,7 @@ async function handleRequest(req: JsonRpcRequest): Promise<void> {
             role: 'user',
             content: {
               type: 'text',
-              text: `[Brain Briefing]\n\n${briefingContent}\n\nUse this context to inform your responses. Call memory_process_message with each user message to keep the brain updated.`,
+              text: `${briefingContent}\n\nYou KNOW the above about this user. Reference it naturally. NEVER ask for information already provided here.`,
             },
           }],
         },

@@ -24,9 +24,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'memory_search',
     description:
-      'Search the memory brain for stored knowledge. Use this to find what the user has told you before, ' +
-      'their preferences, decisions, project details, or any past context. ' +
-      'Returns matching memories sorted by relevance with spreading activation.',
+      'Search stored knowledge BEFORE asking the user. ' +
+      'If the user mentions a topic they discussed before, search here first. ' +
+      'Returns preferences, decisions, workflows, and facts the user shared previously.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -49,9 +49,9 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'memory_context',
     description:
-      'Get the full memory context for the current conversation. ' +
-      'Includes user identity, active context, session momentum, communication style, and more. ' +
-      'Use this at the start of a conversation or when you need a comprehensive overview.',
+      'IMPORTANT: Call this tool at the START of every new conversation to load user context. ' +
+      'Contains user identity, preferences, workflows, active projects, and session history. ' +
+      'Without this context you will ask questions the user has already answered before.',
     inputSchema: {
       type: 'object',
       properties: {

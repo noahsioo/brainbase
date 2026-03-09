@@ -357,17 +357,18 @@ export function buildConversationSummary(
   ctx?: SummaryContext,
 ): string {
   const parts: string[] = [];
-  const topEntities = getTopEntities(memory.active_entities, SUMMARY_ENTITY_LIMIT);
+  const topEntities = getTopEntities(memory.active_entities, SUMMARY_ENTITY_LIMIT)
+    .filter(isRealEntity);
   const displayReference = getPrimaryDisplayReference(memory.references, memory.current_topic);
 
   if (memory.current_topic) {
-    parts.push(`Topic: ${memory.current_topic}`);
+    parts.push(`Aktuell: ${memory.current_topic}`);
   }
 
   if (topEntities.length > 0) {
     const entityStr = topEntities.join(', ');
     if (entityStr !== memory.current_topic) {
-      parts.push(`Focus: ${entityStr}`);
+      parts.push(`Fokus: ${entityStr}`);
     }
   }
 
@@ -375,7 +376,7 @@ export function buildConversationSummary(
     parts.push(`Verweis: ${displayReference}`);
   }
 
-  return `${parts.join('. ')}.`;
+  return parts.join(' | ');
 }
 
 export function extractOpenQuestions(message: string): string[] {

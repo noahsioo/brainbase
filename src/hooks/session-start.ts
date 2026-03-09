@@ -1,5 +1,5 @@
-import { createSession, getDb, findEntityByName } from '../memory/store.js';
-import { generateContext } from '../memory/context-generator.js';
+import { createSession, getDb, findEntityByName, type Node } from '../memory/store.js';
+import { getUserName } from '../memory/context-generator.js';
 import { sendToWatcher } from '../watcher/daemon.js';
 import { clearSessionActivationOverlay, activateNode } from '../memory/activation.js';
 import { incrementSessionCount, isCriticalPeriod, getDevelopmentPhase } from '../memory/cold-start.js';
