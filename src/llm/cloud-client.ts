@@ -211,11 +211,17 @@ export class CloudClient implements LLMClient {
     }
     messages.push({ role: 'user', content: prompt });
 
+    // Newer OpenAI models (o1, gpt-5.x) require max_completion_tokens instead of max_tokens
+    const useNewTokenParam = /^(o[1-9]|gpt-5|gpt-4o-\d{4})/.test(this.model);
+    const tokenLimit = opts?.maxTokens ?? 1024;
+
     const body: Record<string, unknown> = {
       model: this.model,
       messages,
       temperature: opts?.temperature ?? 0.3,
-      max_tokens: opts?.maxTokens ?? 1024,
+      ...(useNewTokenParam
+        ? { max_completion_tokens: tokenLimit }
+        : { max_tokens: tokenLimit }),
     };
 
     if (json) {
