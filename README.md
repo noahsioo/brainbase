@@ -11,8 +11,8 @@
 <p align="center">
   <img src="https://img.shields.io/npm/v/veris?style=for-the-badge" alt="npm">
   <img src="https://img.shields.io/badge/license-ELv2-blue?style=for-the-badge" alt="license">
-  <img src="https://img.shields.io/badge/TypeScript-18k_lines-blue?style=for-the-badge" alt="TypeScript">
-  <img src="https://img.shields.io/badge/mechanisms-92-purple?style=for-the-badge" alt="mechanisms">
+  <img src="https://img.shields.io/badge/TypeScript-24k_lines-blue?style=for-the-badge" alt="TypeScript">
+  <img src="https://img.shields.io/badge/mechanisms-124+-purple?style=for-the-badge" alt="mechanisms">
 </p>
 
 <p align="center">
@@ -40,7 +40,7 @@ Your AI is a genius with amnesia.
 
 Veris is not a memory plugin. It's an actual brain.
 
-Not metaphorically. 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — translated into code. **92 mechanisms. 18,000 lines of TypeScript. Built in 20 days by a 17-year-old.**
+Not metaphorically. 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — translated into code. **124+ mechanisms. 24,700+ lines of TypeScript. Built by a 17-year-old.**
 
 The AI you use (OpenClaw, Claude Code, Cursor, Codex, Gemini — any of them) is just the mouth. It vibrates, it produces words. But the *brain* behind it? That's Veris. Same personality, same memories, same knowledge — no matter which AI you talk through.
 
@@ -65,7 +65,7 @@ npm install -g veris
 | Self-awareness | None | Metacognition — the brain knows what it knows and what it doesn't |
 
 <details>
-<summary><strong>All 92 mechanisms</strong></summary>
+<summary><strong>All 124+ mechanisms</strong></summary>
 
 **Thalamus:** 4 Nuclei, Burst/Tonic modes, Cross-Inhibition, Adaptive Thresholds, Sensory Gating, Latent Inhibition
 
@@ -103,7 +103,7 @@ npm install -g veris
 
 **Lifecycle:** Development Phases, Age-Specific Behavior across all subsystems
 
-Full descriptions: [All 92 Mechanisms →](https://docs.veris.dev/mechanisms/)
+Full descriptions: [All 124+ Mechanisms →](https://docs.veris.dev/mechanisms/)
 </details>
 
 ## Supported providers
@@ -211,6 +211,9 @@ This isn't a database that waits for queries. Veris runs continuously:
 | `veris verify` | Run brain integrity check |
 | `veris snapshot` | Export brain state |
 | `veris embed` | Generate embeddings for hybrid search |
+| `veris detect` | Detect installed AI providers |
+| `veris mcp install` | Register MCP server for a provider |
+| `veris site` | Open veris.dev in browser |
 
 Full reference with flags and examples: [CLI docs →](https://docs.veris.dev/cli/)
 
@@ -257,7 +260,7 @@ src/
 └── config.ts        # Central configuration
 ```
 
-100 TypeScript files. 18,000+ lines. Zero dependencies on any AI provider.
+107 TypeScript files. 24,700+ lines. Zero dependencies on any AI provider.
 
 [Full architecture breakdown →](https://docs.veris.dev/architecture/)
 
