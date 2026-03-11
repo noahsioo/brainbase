@@ -1,6 +1,6 @@
 {
   "name": "veris-dev",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Cross-provider persistent memory system for AI coding assistants",
   "license": "Elastic-2.0",
   "type": "module",
