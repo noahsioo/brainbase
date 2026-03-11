@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/noahsioo/veris/main/docs/logo.png" alt="Veris" width="80">
+  <img src="docs/logo.svg" alt="Veris" width="80">
 </p>
 
 <h1 align="center">Veris</h1>
