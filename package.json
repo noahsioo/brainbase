@@ -1,5 +1,5 @@
 {
-  "name": "veris-cli",
+  "name": "veris-dev",
   "version": "0.1.0",
   "description": "Cross-provider persistent memory system for AI coding assistants",
   "license": "Elastic-2.0",

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/npm/v/veris?style=for-the-badge" alt="npm">
+  <img src="https://img.shields.io/npm/v/veris-dev?style=for-the-badge" alt="npm">
   <img src="https://img.shields.io/badge/license-ELv2-blue?style=for-the-badge" alt="license">
   <img src="https://img.shields.io/badge/TypeScript-24k_lines-blue?style=for-the-badge" alt="TypeScript">
   <img src="https://img.shields.io/badge/mechanisms-124+-purple?style=for-the-badge" alt="mechanisms">
@@ -49,7 +49,7 @@ Switch from OpenClaw to Cursor mid-project. Veris doesn't care. It knows you. It
 **One brain. Every AI. Local. Private. Free.**
 
 ```bash
-npm install -g veris
+npm install -g veris-dev
 ```
 
 ## Why this is different
@@ -127,7 +127,7 @@ Setup guide for each provider: [Provider docs →](https://docs.veris.dev/provid
 ## Install
 
 ```bash
-npm install -g veris
+npm install -g veris-dev
 ```
 
 ### Quick start
