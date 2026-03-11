@@ -1,4 +1,4 @@
-# AUDIT: BrainBase Model-Auswahl vs OpenClaw — Komplett-Vergleich
+# AUDIT: Veris Model-Auswahl vs OpenClaw — Komplett-Vergleich
 
 Stand: 2026-03-09 | Basis: OpenClaw Source Code (`/tmp/openclaw-src`)
 
@@ -20,18 +20,18 @@ qianfan, copilot, vercel-ai, opencode-zen, xiaomi, synthetic,
 together, huggingface, venice, litellm, cloudflare, custom
 ```
 
-### BrainBase PROVIDER_GROUPS (31 Eintraege):
+### Veris PROVIDER_GROUPS (31 Eintraege):
 ```
 openai, anthropic, chutes, vllm, minimax, moonshot, google, xai,
 mistral, volcengine, byteplus, openrouter, kilocode, qwen, zai,
 qianfan, copilot, vercel-ai, opencode-zen, xiaomi, synthetic,
 together, huggingface, venice, litellm, cloudflare,
-+ deepseek, groq, cerebras, nvidia (BB Extras),
-+ ollama (BB Extra, besser als OpenClaw)
++ deepseek, groq, cerebras, nvidia (Veris Extras),
++ ollama (Veris Extra, besser als OpenClaw)
 + custom, skip
 ```
 
-**Status: BrainBase hat MEHR Provider als OpenClaw.**
+**Status: Veris hat MEHR Provider als OpenClaw.**
 - DeepSeek, Groq, Cerebras, NVIDIA: Eigene Eintraege (bei OpenClaw nur via Katalog)
 - Ollama: Eigener Flow mit Auto-Detection (OpenClaw hat keinen separaten)
 
@@ -39,7 +39,7 @@ together, huggingface, venice, litellm, cloudflare,
 
 ## 2. DEFAULT-MODELS (31 Provider) — 1:1 mit OpenClaw
 
-| Provider | BrainBase | OpenClaw Quelle | Match |
+| Provider | Veris | OpenClaw Quelle | Match |
 |----------|-----------|-----------------|-------|
 | openai | `gpt-5.4` | `model-catalog.ts:37` OPENAI_GPT54_MODEL_ID | YES |
 | anthropic | `claude-sonnet-4-6` | `defaults.ts:4` (wir: Sonnet fuer Watcher Budget) | YES* |
@@ -73,7 +73,7 @@ together, huggingface, venice, litellm, cloudflare,
 | opencode-zen | `claude-opus-4-6` | `opencode-zen-model-default.ts:4` | YES |
 | custom | `gpt-5.4` | Fallback | YES |
 
-*Anthropic: OpenClaw default ist `claude-opus-4-6` (Coding-LLM). BrainBase nutzt `claude-sonnet-4-6` weil der Watcher ein Background-Agent ist (guenstiger). Opus ist im Katalog als Option verfuegbar.
+*Anthropic: OpenClaw default ist `claude-opus-4-6` (Coding-LLM). Veris nutzt `claude-sonnet-4-6` weil der Watcher ein Background-Agent ist (guenstiger). Opus ist im Katalog als Option verfuegbar.
 
 ---
 
@@ -213,7 +213,7 @@ Diese Provider haben keinen MODEL_CATALOG Eintrag und zeigen stattdessen:
 
 ---
 
-## 5. FLOW-VERGLEICH: OpenClaw vs BrainBase
+## 5. FLOW-VERGLEICH: OpenClaw vs Veris
 
 ### Model-Selection Flow
 
@@ -224,7 +224,7 @@ Diese Provider haben keinen MODEL_CATALOG Eintrag und zeigen stattdessen:
 4. Pro Model: `provider/id` + Name + ctx + reasoning + alias + "auth missing"
 5. Selection -> return model ref
 
-**BrainBase** (`init.ts` Zeile 753-823):
+**Veris** (`init.ts` Zeile 753-823):
 1. Lade statischen MODEL_CATALOG fuer den gewaehlten Provider
 2. Wenn Katalog vorhanden: Zeige alle Models + "Enter manually"
 3. Wenn kein Katalog: Zeige default + "Enter manually"
@@ -232,30 +232,30 @@ Diese Provider haben keinen MODEL_CATALOG Eintrag und zeigen stattdessen:
 5. Selection -> set selectedModel
 
 **Unterschiede und warum sie OK sind:**
-- BB hat statischen Katalog statt dynamischem -> kein Pi SDK noetig, Updates via Code
-- BB hat kein "Keep current" -> irrelevant beim Erst-Setup (init)
-- BB hat kein "auth missing" Hint -> Auth ist schon konfiguriert BEVOR Model-Auswahl
-- BB hat keinen Provider-Filter -> max 5 Models pro Provider, nicht noetig
-- BB zeigt `label` statt `provider/id` -> cleaner fuer User
+- Verishat statischen Katalog statt dynamischem -> kein Pi SDK noetig, Updates via Code
+- Verishat kein "Keep current" -> irrelevant beim Erst-Setup (init)
+- Verishat kein "auth missing" Hint -> Auth ist schon konfiguriert BEVOR Model-Auswahl
+- Verishat keinen Provider-Filter -> max 5 Models pro Provider, nicht noetig
+- Veriszeigt `label` statt `provider/id` -> cleaner fuer User
 
 ### Auth Flow
 
 **OpenClaw**: Provider-Gruppe -> Auth-Methoden (OAuth/Token/API Key) -> Credentials
-**BrainBase**: Provider -> Auto-Detect Env -> Paste/Env/Back -> Connection Test
+**Veris**: Provider -> Auto-Detect Env -> Paste/Env/Back -> Connection Test
 
-**Warum BB simpler**: Watcher braucht nur API-Key, kein OAuth/Setup-Token.
+**Warum Verissimpler**: Watcher braucht nur API-Key, kein OAuth/Setup-Token.
 
 ### Connection Testing
 
 **OpenClaw**: POST /chat/completions, max_tokens: 1, 30s timeout
-**BrainBase**: GET /models -> Fallback POST /chat/completions, max_tokens: 5, 10s timeout
+**Veris**: GET /models -> Fallback POST /chat/completions, max_tokens: 5, 10s timeout
 
-**Identisches Pattern**, BB hat sogar 2-stufigen Test (models first).
+**Identisches Pattern**, Verishat sogar 2-stufigen Test (models first).
 
 ### Custom Provider
 
 **OpenClaw**: Base URL -> API Key -> Compat (OpenAI/Anthropic/Auto-detect) -> Azure-Detect -> Model
-**BrainBase**: Base URL -> Azure-Detect -> Compat (OpenAI/Anthropic/Auto-detect) -> Model -> API Key
+**Veris**: Base URL -> Azure-Detect -> Compat (OpenAI/Anthropic/Auto-detect) -> Model -> API Key
 
 **1:1 identisch**, nur leicht andere Reihenfolge. Azure-Auto-Detection identisch.
 
@@ -292,4 +292,4 @@ $ grep -r "gpt-4\.1" src/
 
 ## 8. FAZIT
 
-Die Model-Auswahl in BrainBase ist jetzt **auf dem Stand von Maerz 2026**, basierend auf OpenClaw's Source Code. Jeder Provider zeigt aktuelle Modelle als erste Option, mit Legacy-Modellen als Alternative. Die Engine (CloudClient, Connection Testing, Auth Flow) war schon vorher gut und braucht keinen Umbau.
+Die Model-Auswahl in Veris ist jetzt **auf dem Stand von Maerz 2026**, basierend auf OpenClaw's Source Code. Jeder Provider zeigt aktuelle Modelle als erste Option, mit Legacy-Modellen als Alternative. Die Engine (CloudClient, Connection Testing, Auth Flow) war schon vorher gut und braucht keinen Umbau.

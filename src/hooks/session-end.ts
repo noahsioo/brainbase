@@ -48,7 +48,7 @@ export async function handleSessionEnd(input: SessionEndInput): Promise<void> {
         transcript_path: input.transcript_path,
       }).catch((err) => {
         try {
-          const logDir = join(homedir(), '.brainbase/logs');
+          const logDir = join(homedir(), '.veris/logs');
           mkdirSync(logDir, { recursive: true });
           appendFileSync(join(logDir, 'watcher.log'), `[${new Date().toISOString()}] [session-end-hook] sendToWatcher failed: ${err}\n`);
         } catch {}

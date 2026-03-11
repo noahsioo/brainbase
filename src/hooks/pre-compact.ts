@@ -34,11 +34,11 @@ export async function handlePreCompact(input: PreCompactInput = {}): Promise<voi
     // 3. Minimal systemMessage (only thing PreCompact can output)
     const topic = workingMemory?.current_topic || 'unknown';
     process.stdout.write(JSON.stringify({
-      systemMessage: `Conversation compressed. Topic: ${topic}. BrainBase will restore context.`,
+      systemMessage: `Conversation compressed. Topic: ${topic}. Veris will restore context.`,
     }));
   } catch {
     process.stdout.write(JSON.stringify({
-      systemMessage: 'Conversation compressed. BrainBase will restore context.',
+      systemMessage: 'Conversation compressed. Veris will restore context.',
     }));
   }
 }

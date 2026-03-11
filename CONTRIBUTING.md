@@ -1,10 +1,10 @@
-# Contributing to BrainBase
+# Contributing to Veris
 
 Thanks for your interest in contributing. Here's how you can help.
 
 ## Reporting bugs
 
-Open a [GitHub Issue](https://github.com/noahsioo/brainbase/issues) with:
+Open a [GitHub Issue](https://github.com/noahsioo/veris/issues) with:
 - What happened vs. what you expected
 - Steps to reproduce
 - Your OS, Node version, and AI provider

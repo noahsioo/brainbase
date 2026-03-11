@@ -23,7 +23,7 @@ const PRE_WIRED_NODES: CoreNode[] = [
   { label: 'goals', type: 'core', importance: 0.8, content: 'Goals' },
   { label: 'expertise_map', type: 'core', importance: 0.7, content: 'Expertise Map' },
   { label: 'system_knowledge', type: 'system_knowledge', importance: 0.6,
-    content: 'BrainBase is an AI memory system. Knowledge Graph with Nodes and Edges. Spreading Activation finds relevant memories. Signal-Strength determines what gets stored. Everything local. Free and source-available. Commands: brainbase dashboard, stats, search, insights.' },
+    content: 'Veris is an AI memory system. Knowledge Graph with Nodes and Edges. Spreading Activation finds relevant memories. Signal-Strength determines what gets stored. Everything local. Free and source-available. Commands: veris dashboard, stats, search, insights.' },
 ];
 
 export function createPreWiredNodes(profile?: QuickProfile): Map<string, Node> {

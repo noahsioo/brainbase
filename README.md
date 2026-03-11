@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="BrainBase" width="80">
+  <img src="docs/logo.svg" alt="Veris" width="80">
 </p>
 
-<h1 align="center">BrainBase</h1>
+<h1 align="center">Veris</h1>
 
 <p align="center">
   <strong>Your AI forgets everything. Give it a real brain.</strong>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/npm/v/brainbase?style=for-the-badge" alt="npm">
+  <img src="https://img.shields.io/npm/v/veris?style=for-the-badge" alt="npm">
   <img src="https://img.shields.io/badge/license-ELv2-blue?style=for-the-badge" alt="license">
   <img src="https://img.shields.io/badge/TypeScript-18k_lines-blue?style=for-the-badge" alt="TypeScript">
   <img src="https://img.shields.io/badge/mechanisms-92-purple?style=for-the-badge" alt="mechanisms">
@@ -22,8 +22,8 @@
   <a href="#supported-providers">Providers</a> ·
   <a href="#commands">Commands</a> ·
   <a href="#dashboard">Dashboard</a> ·
-  <a href="https://docs.brainbase.dev">Docs</a> ·
-  <a href="https://brainbase.dev">Website</a>
+  <a href="https://docs.veris.dev">Docs</a> ·
+  <a href="https://veris.dev">Website</a>
 </p>
 
 ## The problem
@@ -36,25 +36,25 @@ The current "solutions"? A vector database that keyword-matches your old message
 
 Your AI is a genius with amnesia.
 
-## What BrainBase is
+## What Veris is
 
-BrainBase is not a memory plugin. It's an actual brain.
+Veris is not a memory plugin. It's an actual brain.
 
 Not metaphorically. 158 documented neuroscience mechanisms — how the human brain stores, retrieves, connects, and strengthens memories — translated into code. **92 mechanisms. 18,000 lines of TypeScript. Built in 20 days by a 17-year-old.**
 
-The AI you use (OpenClaw, Claude Code, Cursor, Codex, Gemini — any of them) is just the mouth. It vibrates, it produces words. But the *brain* behind it? That's BrainBase. Same personality, same memories, same knowledge — no matter which AI you talk through.
+The AI you use (OpenClaw, Claude Code, Cursor, Codex, Gemini — any of them) is just the mouth. It vibrates, it produces words. But the *brain* behind it? That's Veris. Same personality, same memories, same knowledge — no matter which AI you talk through.
 
-Switch from OpenClaw to Cursor mid-project. BrainBase doesn't care. It knows you. It knows your project. It picks up where you left off.
+Switch from OpenClaw to Cursor mid-project. Veris doesn't care. It knows you. It knows your project. It picks up where you left off.
 
 **One brain. Every AI. Local. Private. Free.**
 
 ```bash
-npm install -g brainbase
+npm install -g veris
 ```
 
 ## Why this is different
 
-| | Vector search / RAG | BrainBase |
+| | Vector search / RAG | Veris |
 |---|---|---|
 | Storage | Chunks of text in a database | Knowledge graph — entities, relationships, weighted edges |
 | Retrieval | Keyword/embedding similarity | Spreading activation — memories trigger connected memories |
@@ -103,7 +103,7 @@ npm install -g brainbase
 
 **Lifecycle:** Development Phases, Age-Specific Behavior across all subsystems
 
-Full descriptions: [All 92 Mechanisms →](https://docs.brainbase.dev/mechanisms/)
+Full descriptions: [All 92 Mechanisms →](https://docs.veris.dev/mechanisms/)
 </details>
 
 ## Supported providers
@@ -122,29 +122,29 @@ Works with any AI that supports hooks or MCP:
 | **Continue** | MCP Server | Full |
 | **Any MCP client** | MCP Server (stdio) | Full |
 
-Setup guide for each provider: [Provider docs →](https://docs.brainbase.dev/providers/)
+Setup guide for each provider: [Provider docs →](https://docs.veris.dev/providers/)
 
 ## Install
 
 ```bash
-npm install -g brainbase
+npm install -g veris
 ```
 
 ### Quick start
 
 ```bash
 # Initialize — creates your brain, connects your AI providers
-brainbase init
+veris init
 
 # Start the background daemon — processes memories while you work
-brainbase watcher start
+veris watcher start
 
-# That's it. Use your AI normally. BrainBase runs silently.
+# That's it. Use your AI normally. Veris runs silently.
 ```
 
-After `brainbase init`, just use your AI normally. BrainBase works in the background — extracting knowledge, building connections, strengthening memories. Your AI gets smarter with every conversation.
+After `veris init`, just use your AI normally. Veris works in the background — extracting knowledge, building connections, strengthening memories. Your AI gets smarter with every conversation.
 
-Full setup guide: [Getting Started →](https://docs.brainbase.dev/getting-started/installation.html)
+Full setup guide: [Getting Started →](https://docs.veris.dev/getting-started/installation.html)
 
 ## How it works
 
@@ -152,7 +152,7 @@ Full setup guide: [Getting Started →](https://docs.brainbase.dev/getting-start
 You talk to any AI
         |
         v
-   [ BrainBase ]
+   [ Veris ]
         |
    +---------+---------+---------+
    |         |         |         |
@@ -182,11 +182,11 @@ Thalamus  Senses   Emotion   Memory
 
 Your AI never sees the graph directly. It gets a narrative briefing with exactly the right context for the current conversation.
 
-Deep dive into every mechanism: [How BrainBase Works →](https://docs.brainbase.dev/concepts/overview.html)
+Deep dive into every mechanism: [How Veris Works →](https://docs.veris.dev/concepts/overview.html)
 
 ## The brain is alive
 
-This isn't a database that waits for queries. BrainBase runs continuously:
+This isn't a database that waits for queries. Veris runs continuously:
 
 - **Sleep cycles** — every 6 hours, the brain consolidates. NREM strengthens important memories, REM finds creative connections between unrelated knowledge
 - **Hunger** — the brain detects knowledge gaps and drives your AI to ask the right questions. Not because you told it to — because it *wants* to know
@@ -197,22 +197,22 @@ This isn't a database that waits for queries. BrainBase runs continuously:
 
 | Command | Description |
 |---------|-------------|
-| `brainbase init` | Setup wizard — creates brain, connects providers |
-| `brainbase status` | Brain health, node count, provider status |
-| `brainbase watcher start` | Start background memory processing |
-| `brainbase dashboard` | Open 3D brain visualization |
-| `brainbase search <query>` | Search your knowledge graph |
-| `brainbase stats` | Detailed brain statistics |
-| `brainbase list` | Recent memory nodes |
-| `brainbase hot` | Most activated nodes right now |
-| `brainbase add <text>` | Manually add knowledge |
-| `brainbase forget <query>` | Remove specific memories |
-| `brainbase consolidate` | Trigger manual consolidation cycle |
-| `brainbase verify` | Run brain integrity check |
-| `brainbase snapshot` | Export brain state |
-| `brainbase embed` | Generate embeddings for hybrid search |
+| `veris init` | Setup wizard — creates brain, connects providers |
+| `veris status` | Brain health, node count, provider status |
+| `veris watcher start` | Start background memory processing |
+| `veris dashboard` | Open 3D brain visualization |
+| `veris search <query>` | Search your knowledge graph |
+| `veris stats` | Detailed brain statistics |
+| `veris list` | Recent memory nodes |
+| `veris hot` | Most activated nodes right now |
+| `veris add <text>` | Manually add knowledge |
+| `veris forget <query>` | Remove specific memories |
+| `veris consolidate` | Trigger manual consolidation cycle |
+| `veris verify` | Run brain integrity check |
+| `veris snapshot` | Export brain state |
+| `veris embed` | Generate embeddings for hybrid search |
 
-Full reference with flags and examples: [CLI docs →](https://docs.brainbase.dev/cli/)
+Full reference with flags and examples: [CLI docs →](https://docs.veris.dev/cli/)
 
 ## Dashboard
 
@@ -228,10 +228,10 @@ Oh yeah, I also built a dashboard. Because why not. 🧠
 - Watcher status and consolidation history
 
 ```bash
-brainbase dashboard
+veris dashboard
 ```
 
-[Dashboard docs →](https://docs.brainbase.dev/dashboard/)
+[Dashboard docs →](https://docs.veris.dev/dashboard/)
 
 ## Architecture
 
@@ -259,7 +259,7 @@ src/
 
 100 TypeScript files. 18,000+ lines. Zero dependencies on any AI provider.
 
-[Full architecture breakdown →](https://docs.brainbase.dev/architecture/)
+[Full architecture breakdown →](https://docs.veris.dev/architecture/)
 
 ## Privacy
 
@@ -267,7 +267,7 @@ Your brain runs **100% locally**. SQLite database on your machine. No cloud. No 
 
 Your data is yours. Always.
 
-[Privacy & License details →](https://docs.brainbase.dev/privacy/)
+[Privacy & License details →](https://docs.veris.dev/privacy/)
 
 ## Tech Stack
 

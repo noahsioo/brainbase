@@ -1,8 +1,15 @@
 import { homedir } from 'os';
 import { join } from 'path';
-import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, unlinkSync, renameSync } from 'fs';
 
-export const MEMORY_DIR = join(homedir(), '.brainbase');
+// Migration: move old .brainbase → .veris
+const _oldDir = join(homedir(), '.brainbase');
+const _newDir = join(homedir(), '.veris');
+if (existsSync(_oldDir) && !existsSync(_newDir)) {
+  try { renameSync(_oldDir, _newDir); } catch { /* cross-device fallback: user must move manually */ }
+}
+
+export const MEMORY_DIR = join(homedir(), '.veris');
 export const DATA_DIR = join(MEMORY_DIR, 'data');
 export const LOGS_DIR = join(MEMORY_DIR, 'logs');
 export const BACKUPS_DIR = join(MEMORY_DIR, 'backups');
@@ -20,8 +27,8 @@ export const PROVIDER_PATHS = {
   },
   codex: {
     dir: join(homedir(), '.codex'),
-    skillDir: join(homedir(), '.codex', 'skills', 'brainbase'),
-    skillFile: join(homedir(), '.codex', 'skills', 'brainbase', 'SKILL.md'),
+    skillDir: join(homedir(), '.codex', 'skills', 'veris'),
+    skillFile: join(homedir(), '.codex', 'skills', 'veris', 'SKILL.md'),
   },
   gemini: {
     dir: join(homedir(), '.gemini'),
@@ -34,26 +41,26 @@ export const PROVIDER_PATHS = {
   cursor: {
     dir: join(homedir(), '.cursor'),
     rulesDir: join(homedir(), '.cursor', 'rules'),
-    mdFile: join(homedir(), '.cursor', 'rules', 'brainbase.mdc'),
+    mdFile: join(homedir(), '.cursor', 'rules', 'veris.mdc'),
     altDir: '/Applications/Cursor.app',
   },
   windsurf: {
     dir: join(homedir(), '.codeium'),
-    mdFile: join(homedir(), '.codeium', 'windsurf', 'memories', 'brainbase.md'),
+    mdFile: join(homedir(), '.codeium', 'windsurf', 'memories', 'veris.md'),
     altDir: '/Applications/Windsurf.app',
   },
   'continue-dev': {
     dir: join(homedir(), '.continue'),
-    mdFile: join(homedir(), '.continue', 'brainbase.md'),
+    mdFile: join(homedir(), '.continue', 'veris.md'),
   },
   'claude-desktop': {
     dir: join(homedir(), 'Library', 'Application Support', 'Claude'),
-    mdFile: join(homedir(), 'Library', 'Application Support', 'Claude', 'brainbase.md'),
+    mdFile: join(homedir(), 'Library', 'Application Support', 'Claude', 'veris.md'),
   },
   aider: {
     dir: join(homedir(), '.aider'),
     confFile: join(homedir(), '.aider.conf.yml'),
-    mdFile: join(homedir(), '.aider', 'brainbase.md'),
+    mdFile: join(homedir(), '.aider', 'veris.md'),
   },
   goose: {
     dir: join(homedir(), '.config', 'goose'),
@@ -136,8 +143,8 @@ export const CONTEXT_BUDGET_STANDARD = 3000;
 export const CONTEXT_BUDGET_LIGHT = 1300;
 export const CONTEXT_BUDGET_MINIMAL = 500;
 
-export const MEMORY_BLOCK_START = '<!-- BRAINBASE:START - DO NOT EDIT THIS BLOCK -->';
-export const MEMORY_BLOCK_END = '<!-- BRAINBASE:END -->';
+export const MEMORY_BLOCK_START = '<!-- VERIS:START - DO NOT EDIT THIS BLOCK -->';
+export const MEMORY_BLOCK_END = '<!-- VERIS:END -->';
 
 export const OLLAMA_URL = 'http://localhost:11434';
 export const OLLAMA_MODEL_PRIMARY = 'llama3.2:3b';

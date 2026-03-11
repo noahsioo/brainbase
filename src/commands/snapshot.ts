@@ -23,7 +23,7 @@ export const snapshotCommand = new Command('snapshot')
     ).all(limit) as SnapshotRow[];
 
     if (rows.length === 0) {
-      console.log(chalk.yellow('\n  No snapshots yet. Run: brainbase consolidate\n'));
+      console.log(chalk.yellow('\n  No snapshots yet. Run: veris consolidate\n'));
       return;
     }
 

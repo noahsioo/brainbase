@@ -30,7 +30,7 @@ function printResult(r: CheckResult): void {
 export const verifyCommand = new Command('verify')
   .description('Verify that the brain and all subsystems are working correctly')
   .action(() => {
-    console.log(chalk.bold('\n  BrainBase - System Verification\n'));
+    console.log(chalk.bold('\n  Veris - System Verification\n'));
 
     const results: CheckResult[] = [];
     let criticalFail = false;
@@ -38,7 +38,7 @@ export const verifyCommand = new Command('verify')
     // ── 1. Config ──
     console.log(chalk.bold.cyan('  [1/6] Config'));
     const configExists = existsSync(CONFIG_PATH);
-    results.push(check('Config file', configExists, configExists ? CONFIG_PATH : 'Nicht gefunden - run `brainbase init`'));
+    results.push(check('Config file', configExists, configExists ? CONFIG_PATH : 'Nicht gefunden - run `veris init`'));
     if (!configExists) criticalFail = true;
 
     if (configExists) {
@@ -109,7 +109,7 @@ export const verifyCommand = new Command('verify')
           coreResults.push(check(`  ${label}`, found, found ? 'vorhanden' : 'FEHLT'));
         }
 
-        const sysKnowledge = searchNodes('BrainBase ist ein', 1);
+        const sysKnowledge = searchNodes('Veris ist ein', 1);
         coreResults.push(check('System Knowledge', sysKnowledge.length > 0, sysKnowledge.length > 0 ? 'vorhanden' : 'FEHLT'));
       } catch (e) {
         coreResults.push(check('Core Nodes Check', false, String(e)));
@@ -138,7 +138,7 @@ export const verifyCommand = new Command('verify')
           const hasMemory = Array.isArray(eventHooks) && eventHooks.some((h: Record<string, unknown>) => {
             const innerHooks = (h.hooks || []) as Array<Record<string, unknown>>;
             return innerHooks.some((hh) =>
-              typeof hh.command === 'string' && hh.command.startsWith('brainbase'),
+              typeof hh.command === 'string' && (hh.command.startsWith('veris') || hh.command.startsWith('brainbase')),
             );
           });
           hookResults.push(check(`  ${event}`, hasMemory, hasMemory ? 'registriert' : 'FEHLT'));
@@ -246,7 +246,7 @@ export const verifyCommand = new Command('verify')
     if (failed === 0) {
       console.log(chalk.bold.green(`  Alles OK! ${passed}/${total} Checks bestanden.`));
     } else if (criticalFail) {
-      console.log(chalk.bold.red(`  KRITISCH: ${failed} Fehler. Run \`brainbase init\` zuerst.`));
+      console.log(chalk.bold.red(`  KRITISCH: ${failed} Fehler. Run \`veris init\` zuerst.`));
     } else {
       console.log(chalk.bold.yellow(`  ${passed}/${total} OK, ${failed} Warnungen.`));
     }
