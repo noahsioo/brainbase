@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="Veris" width="80">
+  <img src="https://raw.githubusercontent.com/noahsioo/veris/main/docs/logo.svg" alt="Veris" width="80">
 </p>
 
 <h1 align="center">Veris</h1>
@@ -222,7 +222,11 @@ Full reference with flags and examples: [CLI docs →](https://docs.veris.dev/cl
 Oh yeah, I also built a dashboard. Because why not. 🧠
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/faf0e7af-a8eb-44b9-8317-c011530fca3b" width="700" controls></video>
+  <a href="https://github.com/user-attachments/assets/faf0e7af-a8eb-44b9-8317-c011530fca3b">
+    <img src="https://raw.githubusercontent.com/noahsioo/veris/main/docs/logo.svg" alt="Veris Dashboard Demo" width="700">
+  </a>
+  <br>
+  <em>Click to watch the dashboard demo</em>
 </p>
 
 - Interactive 3D knowledge graph — nodes, edges, clusters
