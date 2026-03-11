@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://veris.dev/apple-touch-icon.png" alt="Veris" width="80">
+  <img src="docs/logo.svg" alt="Veris" width="80">
 </p>
 
 <h1 align="center">Veris</h1>
