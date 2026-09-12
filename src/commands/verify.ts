@@ -109,7 +109,7 @@ export const verifyCommand = new Command('verify')
           coreResults.push(check(`  ${label}`, found, found ? 'vorhanden' : 'FEHLT'));
         }
 
-        const sysKnowledge = searchNodes('BrainBase ist ein', 1);
+        const sysKnowledge = getNodes({ type: 'system_knowledge', limit: 1 });
         coreResults.push(check('System Knowledge', sysKnowledge.length > 0, sysKnowledge.length > 0 ? 'vorhanden' : 'FEHLT'));
       } catch (e) {
         coreResults.push(check('Core Nodes Check', false, String(e)));
