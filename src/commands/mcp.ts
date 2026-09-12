@@ -46,9 +46,9 @@ export function installMcpServerForProvider(provider: string): boolean {
   // Format: gemini-cli — via `gemini mcp add` CLI command
   if (mcpConfig.format === 'gemini-cli') {
     try {
-      execSync('gemini mcp remove veris 2>/dev/null', { stdio: 'ignore' });
       execSync('gemini mcp remove brainbase 2>/dev/null', { stdio: 'ignore' });
-      execSync(`gemini mcp add veris node ${serverPath} --scope user --transport stdio --trust`, { stdio: 'ignore' });
+      execSync('gemini mcp remove brainbase 2>/dev/null', { stdio: 'ignore' });
+      execSync(`gemini mcp add brainbase node ${serverPath} --scope user --transport stdio --trust`, { stdio: 'ignore' });
     } catch { /* gemini not installed */ }
     return true;
   }
@@ -56,9 +56,9 @@ export function installMcpServerForProvider(provider: string): boolean {
   // Format: codex-cli — via `codex mcp add` CLI command
   if (mcpConfig.format === 'codex-cli') {
     try {
-      execSync('codex mcp remove veris 2>/dev/null', { stdio: 'ignore' });
       execSync('codex mcp remove brainbase 2>/dev/null', { stdio: 'ignore' });
-      execSync(`codex mcp add veris -- node ${serverPath}`, { stdio: 'ignore' });
+      execSync('codex mcp remove brainbase 2>/dev/null', { stdio: 'ignore' });
+      execSync(`codex mcp add brainbase -- node ${serverPath}`, { stdio: 'ignore' });
     } catch { /* codex not installed */ }
     return true;
   }
@@ -67,7 +67,7 @@ export function installMcpServerForProvider(provider: string): boolean {
   if (mcpConfig.format === 'zed') {
     const contextServers = (config.context_servers || {}) as Record<string, unknown>;
     delete contextServers['brainbase'];
-    contextServers['veris'] = {
+    contextServers['brainbase'] = {
       command: { path: 'node', args: [serverPath] },
       settings: {},
     };
@@ -80,7 +80,7 @@ export function installMcpServerForProvider(provider: string): boolean {
   if (mcpConfig.format === 'cline' || mcpConfig.format === 'roo-code') {
     const mcpServers = (config.mcpServers || {}) as Record<string, unknown>;
     delete mcpServers['brainbase'];
-    mcpServers['veris'] = {
+    mcpServers['brainbase'] = {
       command: 'node',
       args: [serverPath],
       disabled: false,
@@ -99,7 +99,7 @@ export function installMcpServerForProvider(provider: string): boolean {
         const transport = s.transport as Record<string, unknown> | undefined;
         if (transport) {
           const args = transport.args as string[] | undefined;
-          return args?.some((a) => a.includes('veris') || a.includes('brainbase'));
+          return args?.some((a) => a.includes('brainbase') || a.includes('brainbase'));
         }
         return false;
       },
@@ -124,7 +124,7 @@ export function installMcpServerForProvider(provider: string): boolean {
   } else {
     const mcpServers = (config.mcpServers || {}) as Record<string, unknown>;
     delete mcpServers['brainbase'];
-    mcpServers['veris'] = {
+    mcpServers['brainbase'] = {
       command: 'node',
       args: [serverPath],
     };
@@ -155,7 +155,7 @@ export function uninstallMcpServerForProvider(provider: string): boolean {
       const transport = s.transport as Record<string, unknown> | undefined;
       if (transport) {
         const args = transport.args as string[] | undefined;
-        return !args?.some((a) => a.includes('veris') || a.includes('brainbase'));
+        return !args?.some((a) => a.includes('brainbase') || a.includes('brainbase'));
       }
       return true;
     });
@@ -167,10 +167,10 @@ export function uninstallMcpServerForProvider(provider: string): boolean {
   } else {
     const mcpServers = (config.mcpServers || {}) as Record<string, unknown>;
     const hasOld = !!mcpServers['brainbase'];
-    const hasNew = !!mcpServers['veris'];
+    const hasNew = !!mcpServers['brainbase'];
     if (!hasOld && !hasNew) return false;
     delete mcpServers['brainbase'];
-    delete mcpServers['veris'];
+    delete mcpServers['brainbase'];
     config.mcpServers = mcpServers;
   }
 

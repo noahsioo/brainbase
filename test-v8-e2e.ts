@@ -186,18 +186,18 @@ function sectionToStructured(section: string): string | null {
 const formatTests = [
   {
     name: 'Entity Profile → kompakt',
-    input: '## Ueber Lovis\n- Baut: Veris\n- Nutzt: TypeScript\n- Bevorzugt: direkte Antworten\n',
-    expected: 'Lovis: Veris | TypeScript | direkte Antworten',
+    input: '## Ueber Lovis\n- Baut: BrainBase\n- Nutzt: TypeScript\n- Bevorzugt: direkte Antworten\n',
+    expected: 'Lovis: BrainBase | TypeScript | direkte Antworten',
   },
   {
     name: 'Active Context → Kontext: pipe-separated',
-    input: '## Aktiver Kontext\n- **Veris** (project) → TypeScript, Pruning\n- **Thalamus** (concept) → Signal\n',
-    expected: 'Kontext: Veris (project) → TypeScript, Pruning | Thalamus (concept) → Signal',
+    input: '## Aktiver Kontext\n- **BrainBase** (project) → TypeScript, Pruning\n- **Thalamus** (concept) → Signal\n',
+    expected: 'Kontext: BrainBase (project) → TypeScript, Pruning | Thalamus (concept) → Signal',
   },
   {
     name: 'Entity Graph → Topic: relations',
-    input: '## Zum Thema: veris\n- Lovis → builds → Veris\n- Veris → uses → TypeScript\n',
-    expected: 'veris: Lovis → builds → Veris | Veris → uses → TypeScript',
+    input: '## Zum Thema: brainbase\n- Lovis → builds → BrainBase\n- BrainBase → uses → TypeScript\n',
+    expected: 'brainbase: Lovis → builds → BrainBase | BrainBase → uses → TypeScript',
   },
   {
     name: 'Tasks → pipe-separated',
@@ -206,8 +206,8 @@ const formatTests = [
   },
   {
     name: 'Working Memory → default handler',
-    input: '## Arbeitsgedaechtnis\n- Thema: veris. Fokus: context-generator.\n- Kontext: veris -> building\n',
-    expected: 'Arbeitsgedaechtnis: Thema: veris. Fokus: context-generator. | Kontext: veris -> building',
+    input: '## Arbeitsgedaechtnis\n- Thema: brainbase. Fokus: context-generator.\n- Kontext: brainbase -> building\n',
+    expected: 'Arbeitsgedaechtnis: Thema: brainbase. Fokus: context-generator. | Kontext: brainbase -> building',
   },
   {
     name: 'Warnings → Vorsicht prefix',

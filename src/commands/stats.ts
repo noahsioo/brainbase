@@ -18,7 +18,7 @@ export const statsCommand = new Command('stats')
   .action(() => {
     const stats = getStats();
 
-    console.log(chalk.bold('\n  Veris - Brain Statistics\n'));
+    console.log(chalk.bold('\n  BrainBase - Brain Statistics\n'));
     const activeNodeCount = getActiveOverlayNodeCount();
 
     console.log(`  Total Nodes:     ${chalk.cyan(stats.totalNodes.toString())}`);

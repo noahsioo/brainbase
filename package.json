@@ -1,12 +1,12 @@
 {
-  "name": "veris-dev",
+  "name": "brainbase-dev",
   "version": "0.1.5",
   "description": "Cross-provider persistent memory system for AI coding assistants",
   "license": "Elastic-2.0",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "veris": "dist/index.js"
+    "brainbase": "dist/index.js"
   },
   "scripts": {
     "build": "tsc && mkdir -p dist/dashboard && cp src/dashboard/*.html dist/dashboard/",

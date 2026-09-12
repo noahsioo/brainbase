@@ -4,9 +4,9 @@ Found a security issue? First of all — thank you. Seriously. Please report it 
 
 ## Reporting
 
-Use [GitHub's private vulnerability reporting](https://github.com/noahsioo/veris/security/advisories/new) — this is the fastest way.
+Use [GitHub's private vulnerability reporting](https://github.com/noahsioo/brainbase/security/advisories/new) — this is the fastest way.
 
-If that doesn't work for you, email **security@veris.dev** and I'll take it from there.
+If that doesn't work for you, email **security@brainbase.dev** and I'll take it from there.
 
 ## What to include
 
@@ -19,7 +19,7 @@ Reports without reproduction steps will take longer to process.
 
 ## Scope
 
-Veris runs 100% locally. The main areas to look at:
+BrainBase runs 100% locally. The main areas to look at:
 
 - Watcher daemon (HTTP port 7899)
 - MCP server (stdio JSON-RPC)

@@ -1,6 +1,6 @@
 async function test() {
   const { processMessage } = require('./dist/hooks/user-prompt.js');
-  const db = require('better-sqlite3')(require('os').homedir() + '/.veris/data/memory.db');
+  const db = require('better-sqlite3')(require('os').homedir() + '/.brainbase/data/memory.db');
 
   // ============================================
   // PHASE 1: LERNEN — 3 Messages mit echtem Content

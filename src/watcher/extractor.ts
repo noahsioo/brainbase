@@ -123,7 +123,7 @@ If the answer is NO → do NOT store it. Set nothing_new: true instead.
 ## ENTITIES
 Atomic concepts: people, technologies, projects, tools, places, foods, skills, organizations.
 Each entity must be a SINGLE named concept, not a phrase or description.
-- GOOD entities: "Lovis", "TypeScript", "Veris", "Berlin", "React"
+- GOOD entities: "Lovis", "TypeScript", "BrainBase", "Berlin", "React"
 - BAD entities: "the system", "it", "something", "a thing", "brain", "idea", "concept"
 
 Entity types: person, technology, project, concept, tool, food, place, organization, skill, language, framework, library, service, topic
@@ -135,11 +135,11 @@ How entities connect: uses, likes, dislikes, builds, knows, part_of, works_with,
 
 ## RELATIONSHIP QUALITY
 Relationships are MORE VALUABLE than isolated entities.
-When user says "I use TypeScript for Veris":
-- Extract BOTH: Lovis → uses → TypeScript AND Veris → uses → TypeScript
-Multi-hop: "Lovis builds Veris with TypeScript" → 3 relations:
-  1. Lovis → builds → Veris
-  2. Veris → uses → TypeScript
+When user says "I use TypeScript for BrainBase":
+- Extract BOTH: Lovis → uses → TypeScript AND BrainBase → uses → TypeScript
+Multi-hop: "Lovis builds BrainBase with TypeScript" → 3 relations:
+  1. Lovis → builds → BrainBase
+  2. BrainBase → uses → TypeScript
   3. Lovis → uses → TypeScript
 
 ## FACTS (equally important as entities — capture KNOWLEDGE, not just names)

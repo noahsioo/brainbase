@@ -1,4 +1,4 @@
-const db = require('better-sqlite3')(require('os').homedir() + '/.veris/data/memory.db');
+const db = require('better-sqlite3')(require('os').homedir() + '/.brainbase/data/memory.db');
 
 // Find garbage preference nodes
 const prefs = db.prepare("SELECT id, content FROM nodes WHERE type = 'preference'").all();

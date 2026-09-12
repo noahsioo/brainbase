@@ -1005,7 +1005,7 @@ function extractCleanFacts(rawContext: string): string[] {
       !l.includes('VERIFIED') &&
       !l.includes('previous sessions') &&
       !l.includes('injected context') &&
-      !l.includes('BrainBase') && !l.includes('Veris') &&
+      !l.includes('BrainBase') &&
       !/^\w+ — \w+/.test(l) &&
       !/^Open:/.test(l) &&
       !/^\(/.test(l) &&

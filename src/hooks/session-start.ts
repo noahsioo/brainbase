@@ -208,7 +208,7 @@ export async function handleSessionStart(input: SessionStartInput): Promise<void
     try { refreshClaudeMdContext(); } catch { /* non-fatal */ }
   } catch (err) {
     const fallback = JSON.stringify({
-      systemMessage: 'Veris active.',
+      systemMessage: 'BrainBase active.',
     });
     process.stdout.write(fallback);
   }

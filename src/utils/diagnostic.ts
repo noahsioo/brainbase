@@ -2,7 +2,7 @@ import { mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { LOGS_DIR } from '../config.js';
 
-const DIAGNOSTIC_ENABLED = process.env.VERIS_DIAGNOSTIC === '1' || process.env.BRAINBASE_DIAGNOSTIC === '1';
+const DIAGNOSTIC_ENABLED = process.env.BRAINBASE_DIAGNOSTIC === '1';
 const LOG_FILE = join(LOGS_DIR, 'diagnostic.log');
 
 export function diagnosticLog(tag: string, data: Record<string, unknown>): void {

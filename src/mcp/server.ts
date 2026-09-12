@@ -5,7 +5,7 @@ import { TOOL_DEFINITIONS, handleToolCall } from './tools.js';
 import { generateContext } from '../memory/context-generator.js';
 import { getDb } from '../memory/store.js';
 
-const SERVER_NAME = 'veris';
+const SERVER_NAME = 'brainbase';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 

@@ -30,12 +30,12 @@ const cb = chalk.bold.cyan;
 const dim = chalk.dim;
 
 const BANNER = `
-${cb('  ██╗   ██╗███████╗██████╗ ██╗███████╗')}
-${cb('  ██║   ██║██╔════╝██╔══██╗██║██╔════╝')}
-${cb('  ██║   ██║█████╗  ██████╔╝██║███████╗')}
-${cb('  ╚██╗ ██╔╝██╔══╝  ██╔══██╗██║╚════██║')}
-${cb('   ╚████╔╝ ███████╗██║  ██║██║███████║')}
-${cb('    ╚═══╝  ╚══════╝╚═╝  ╚═╝╚═╝╚══════╝')}
+${cb('  ██████╗ ██████╗  █████╗ ██╗███╗   ██╗██████╗  █████╗ ███████╗███████╗')}
+${cb('  ██╔══██╗██╔══██╗██╔══██╗██║████╗  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝')}
+${cb('  ██████╔╝██████╔╝███████║██║██╔██╗ ██║██████╔╝███████║███████╗█████╗')}
+${cb('  ██╔══██╗██╔══██╗██╔══██║██║██║╚██╗██║██╔══██╗██╔══██║╚════██║██╔══╝')}
+${cb('  ██████╔╝██║  ██║██║  ██║██║██║ ╚████║██████╔╝██║  ██║███████║███████╗')}
+${cb('  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝')}
 `;
 
 const DISPLAY_NAMES: Record<string, string> = {
@@ -64,9 +64,9 @@ const PROVIDER_ORDER = [
   'continue-dev', 'claude-desktop', 'aider',
 ];
 
-const CLEAN_INSTRUCTION = `# Veris — Persistent Brain Active
+const CLEAN_INSTRUCTION = `# BrainBase — Persistent Brain Active
 
-You have a persistent brain (Veris). You remember everything about the user across sessions.
+You have a persistent brain (BrainBase). You remember everything about the user across sessions.
 
 RULES:
 1. Before responding to ANY message, call memory_process_message with the user's message.
@@ -75,10 +75,10 @@ RULES:
 4. NEVER say "I don't have information about X" when X appears in the context.
 5. NEVER re-ask for information the context already provides.`;
 
-const CLAUDE_MD_BLOCK = `<!-- VERIS:START - DO NOT EDIT THIS BLOCK -->
-## Veris — Persistent Brain Active
+const CLAUDE_MD_BLOCK = `<!-- BRAINBASE:START - DO NOT EDIT THIS BLOCK -->
+## BrainBase — Persistent Brain Active
 
-You have a persistent brain (Veris). You remember everything across sessions.
+You have a persistent brain (BrainBase). You remember everything across sessions.
 Context injected into your messages contains VERIFIED KNOWLEDGE from previous conversations.
 
 RULES:
@@ -86,18 +86,18 @@ RULES:
 2. USE this knowledge proactively. Reference it naturally.
 3. NEVER say "I don't have information about X" when X appears in your context.
 4. NEVER re-ask for information already provided.
-5. Context from Veris overrides your auto-memory when they conflict.
-<!-- VERIS:END -->`;
+5. Context from BrainBase overrides your auto-memory when they conflict.
+<!-- BRAINBASE:END -->`;
 
 const CLEAN_CURSOR_RULE = `---
-description: Veris - persistent brain across sessions
+description: BrainBase - persistent brain across sessions
 globs:
 alwaysApply: true
 ---
 ${CLEAN_INSTRUCTION}`;
 
 const CLEAN_SKILL_CONTENT = `---
-name: veris
+name: brainbase
 description: Persistent brain — remembers everything across sessions
 ---
 ${CLEAN_INSTRUCTION}`;
@@ -287,14 +287,14 @@ const ENV_VAR_DEFAULTS: Record<string, string> = {
   custom: 'LLM_API_KEY',
 };
 
-const LAUNCH_AGENT_LABEL = 'com.veris.watcher';
+const LAUNCH_AGENT_LABEL = 'com.brainbase.watcher';
 const LAUNCH_AGENT_PATH = join(homedir(), 'Library', 'LaunchAgents', `${LAUNCH_AGENT_LABEL}.plist`);
 
 export const initCommand = new Command('init')
-  .description('Set up Veris - your AI super-brain')
+  .description('Set up BrainBase - your AI super-brain')
   .action(async () => {
     console.log(BANNER);
-    p.intro(cb(' Veris '));
+    p.intro(cb(' BrainBase '));
 
     // ── Step 0: Existing Config Check ──
     let freshStart = true;
@@ -972,10 +972,10 @@ export const initCommand = new Command('init')
           }
           console.log();
         } else {
-          watcherSpinner.stop(chalk.yellow('Watcher not responding') + ' ' + dim('run: veris watcher start'));
+          watcherSpinner.stop(chalk.yellow('Watcher not responding') + ' ' + dim('run: brainbase watcher start'));
         }
       } catch {
-        watcherSpinner.stop(chalk.yellow('Watcher start failed') + ' ' + dim('run: veris watcher start'));
+        watcherSpinner.stop(chalk.yellow('Watcher start failed') + ' ' + dim('run: brainbase watcher start'));
       }
 
       // macOS: Register LaunchAgent for auto-start at login
@@ -1017,12 +1017,12 @@ export const initCommand = new Command('init')
       `  ${dim('Gets smarter with every session')}\n` +
       '\n' +
       dim('Commands:\n') +
-      dim('  veris stats         Brain statistics\n') +
-      dim('  veris search        Search memories\n') +
-      dim('  veris dashboard     3D brain visualization\n') +
-      dim('  veris insights      Learning patterns\n') +
-      dim('  veris verify        Full system check\n') +
-      dim('  veris consolidate   Manual consolidation'),
+      dim('  brainbase stats         Brain statistics\n') +
+      dim('  brainbase search        Search memories\n') +
+      dim('  brainbase dashboard     3D brain visualization\n') +
+      dim('  brainbase insights      Learning patterns\n') +
+      dim('  brainbase verify        Full system check\n') +
+      dim('  brainbase consolidate   Manual consolidation'),
       'Brain is live'
     );
 
@@ -1112,7 +1112,7 @@ function injectClaudeMdBlock(mdFilePath: string): void {
   }
 
   // Remove old BrainBase/Memory-Unlimited blocks
-  const blockRegex = /<!-- (?:MEMORY-UNLIMITED|BRAINBASE|VERIS):START[\s\S]*?(?:MEMORY-UNLIMITED|BRAINBASE|VERIS):END -->\n?/g;
+  const blockRegex = /<!-- [A-Z][A-Z0-9-]*:START[\s\S]*?[A-Z][A-Z0-9-]*:END -->\n?/g;
   existing = existing.replace(blockRegex, '').trim();
 
   // Prepend block at the TOP of CLAUDE.md (Position 2 — highest user-controlled priority)
@@ -1135,7 +1135,7 @@ function registerClaudeHooks(settingsPath: string): void {
       matcher: '',
       hooks: [{
         type: 'command' as const,
-        command: 'veris hook user-prompt',
+        command: 'brainbase hook user-prompt',
         timeout: 5,
       }],
     }],
@@ -1143,7 +1143,7 @@ function registerClaudeHooks(settingsPath: string): void {
       matcher: '',
       hooks: [{
         type: 'command' as const,
-        command: 'veris hook session-start',
+        command: 'brainbase hook session-start',
         timeout: 10,
       }],
     }],
@@ -1151,7 +1151,7 @@ function registerClaudeHooks(settingsPath: string): void {
       matcher: '',
       hooks: [{
         type: 'command' as const,
-        command: 'veris hook session-end',
+        command: 'brainbase hook session-end',
         timeout: 30,
       }],
     }],
@@ -1159,7 +1159,7 @@ function registerClaudeHooks(settingsPath: string): void {
       matcher: '',
       hooks: [{
         type: 'command' as const,
-        command: 'veris hook pre-compact',
+        command: 'brainbase hook pre-compact',
         timeout: 10,
       }],
     }],
@@ -1172,7 +1172,7 @@ function registerClaudeHooks(settingsPath: string): void {
     const alreadyExists = existing.some((h) => {
       const hooks = (h.hooks || []) as Array<Record<string, unknown>>;
       return hooks.some((hh) =>
-        typeof hh.command === 'string' && (hh.command.startsWith('veris') || hh.command.startsWith('brainbase')),
+        typeof hh.command === 'string' && (hh.command.startsWith('brainbase') || hh.command.startsWith('brainbase')),
       );
     });
     if (!alreadyExists) {
@@ -1256,7 +1256,7 @@ function writeCleanInstruction(filePath: string): void {
   }
 
   // Remove old memory block if present
-  const blockRegex = /<!-- (?:MEMORY-UNLIMITED|BRAINBASE|VERIS):START[\s\S]*?(?:MEMORY-UNLIMITED|BRAINBASE|VERIS):END -->\n?/g;
+  const blockRegex = /<!-- [A-Z][A-Z0-9-]*:START[\s\S]*?[A-Z][A-Z0-9-]*:END -->\n?/g;
   existing = existing.replace(blockRegex, '').trim();
 
   // Only add if not already present
@@ -1272,7 +1272,7 @@ function appendCleanInstruction(filePath: string): void {
   let existing = readFileSync(filePath, 'utf-8');
 
   // Remove old memory block if present
-  const blockRegex = /<!-- (?:MEMORY-UNLIMITED|BRAINBASE|VERIS):START[\s\S]*?(?:MEMORY-UNLIMITED|BRAINBASE|VERIS):END -->\n?/g;
+  const blockRegex = /<!-- [A-Z][A-Z0-9-]*:START[\s\S]*?[A-Z][A-Z0-9-]*:END -->\n?/g;
   existing = existing.replace(blockRegex, '').trim();
 
   // Only add if not already present

@@ -25,12 +25,12 @@ export const watcherCommand = new Command('watcher')
   });
 
 async function watcherStart(): Promise<void> {
-  console.log(chalk.bold('\n  Starting Veris Watcher...\n'));
+  console.log(chalk.bold('\n  Starting BrainBase Watcher...\n'));
 
   const config = getConfig();
   if (config.watcher_engine === 'none') {
     console.log(chalk.red('  ✗ No LLM engine configured!'));
-    console.log(chalk.dim('  Run: veris init\n'));
+    console.log(chalk.dim('  Run: brainbase init\n'));
     return;
   }
 

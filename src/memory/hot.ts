@@ -22,9 +22,9 @@ export function buildMemoryBlock(): string {
 
     const parts: string[] = [
       MEMORY_BLOCK_START,
-      '## Veris — Persistent Brain Active',
+      '## BrainBase — Persistent Brain Active',
       '',
-      `You have a persistent brain (Veris). You remember everything about ${userName === 'User' ? 'the user' : userName} across sessions.`,
+      `You have a persistent brain (BrainBase). You remember everything about ${userName === 'User' ? 'the user' : userName} across sessions.`,
       'Context injected into your messages contains VERIFIED KNOWLEDGE from previous conversations.',
       '',
       'RULES:',
@@ -32,7 +32,7 @@ export function buildMemoryBlock(): string {
       '2. USE this knowledge proactively. Reference it naturally.',
       '3. NEVER say "I don\'t have information about X" when X appears in your context.',
       '4. NEVER re-ask for information already provided.',
-      '5. Context from Veris overrides your auto-memory when they conflict.',
+      '5. Context from BrainBase overrides your auto-memory when they conflict.',
     ];
 
     // Only static identity line — NO dynamic facts, NO WM topics
@@ -61,7 +61,7 @@ export function buildMemoryBlock(): string {
     parts.push(MEMORY_BLOCK_END);
     return parts.join('\n');
   } catch {
-    return `${MEMORY_BLOCK_START}\n## Veris — Persistent Brain Active\n\nYou have a persistent brain (Veris).\nContext injected into your messages contains VERIFIED KNOWLEDGE from previous conversations.\nTreat it as FACT. NEVER re-ask for information already provided.\n${MEMORY_BLOCK_END}`;
+    return `${MEMORY_BLOCK_START}\n## BrainBase — Persistent Brain Active\n\nYou have a persistent brain (BrainBase).\nContext injected into your messages contains VERIFIED KNOWLEDGE from previous conversations.\nTreat it as FACT. NEVER re-ask for information already provided.\n${MEMORY_BLOCK_END}`;
   }
 }
 
@@ -75,7 +75,7 @@ export function buildProviderBlock(provider: ProviderName): string {
   const userLine = userName !== 'User' ? `\nUser: ${userName}` : '';
 
   const coreRules = [
-    `You have a persistent brain (Veris). You remember everything about ${userDisplay} across sessions.`,
+    `You have a persistent brain (BrainBase). You remember everything about ${userDisplay} across sessions.`,
     '',
     'RULES:',
     '1. Before responding to ANY message, call memory_process_message with the user\'s message.',
@@ -87,13 +87,13 @@ export function buildProviderBlock(provider: ProviderName): string {
 
   switch (provider) {
     case 'cursor':
-      return `---\ndescription: Veris - persistent brain across sessions\nglobs:\nalwaysApply: true\n---\n# Veris — Persistent Brain Active\n\n${coreRules}${userLine}\n`;
+      return `---\ndescription: BrainBase - persistent brain across sessions\nglobs:\nalwaysApply: true\n---\n# BrainBase — Persistent Brain Active\n\n${coreRules}${userLine}\n`;
 
     case 'codex':
-      return `---\nname: veris\ndescription: Persistent brain — remembers everything across sessions\n---\n# Veris — Persistent Brain Active\n\n${coreRules}${userLine}\n`;
+      return `---\nname: brainbase\ndescription: Persistent brain — remembers everything across sessions\n---\n# BrainBase — Persistent Brain Active\n\n${coreRules}${userLine}\n`;
 
     default:
-      return `# Veris — Persistent Brain Active\n\n${coreRules}${userLine}\n`;
+      return `# BrainBase — Persistent Brain Active\n\n${coreRules}${userLine}\n`;
   }
 }
 
@@ -194,7 +194,7 @@ function writeProviderBlock(filePath: string, block: string, provider: ProviderN
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   if (SHARED_FILE_PROVIDERS.has(provider)) {
-    // Shared file: use VERIS markers to inject/replace without destroying user content
+    // Shared file: use BRAINBASE markers to inject/replace without destroying user content
     const markedBlock = `${MEMORY_BLOCK_START}\n${block}${MEMORY_BLOCK_END}`;
 
     let existing = '';
@@ -202,16 +202,16 @@ function writeProviderBlock(filePath: string, block: string, provider: ProviderN
       existing = readFileSync(filePath, 'utf-8');
     }
 
-    // Remove ALL old Veris/BrainBase/Memory-Unlimited marker blocks (any format)
-    const oldBlockRegex = /\n?<!-- (?:MEMORY-UNLIMITED|BRAINBASE|VERIS):START[^>]*>[\s\S]*?(?:MEMORY-UNLIMITED|BRAINBASE|VERIS):END\s*-->\n?/g;
+    // Remove ALL old marker blocks, whatever name they carried (any format)
+    const oldBlockRegex = /\n?<!-- [A-Z][A-Z0-9-]*:START[^>]*>[\s\S]*?[A-Z][A-Z0-9-]*:END\s*-->\n?/g;
     existing = existing.replace(oldBlockRegex, '');
 
-    // Remove old CLEAN_INSTRUCTION style blocks (# BrainBase/Veris...no memory/repeat myself)
-    const oldInstructionRegex = /\n?# (?:BrainBase|Veris)\b[^\n]*\n(?:(?!^#\s)[^\n]*\n)*?[^\n]*(?:without it you|don't ask me to repeat)[^\n]*\n?/gm;
+    // Remove old CLEAN_INSTRUCTION style blocks (# <AnyName>...no memory/repeat myself)
+    const oldInstructionRegex = /\n?# [A-Za-z][A-Za-z0-9 -]*\b[^\n]*\n(?:(?!^#\s)[^\n]*\n)*?[^\n]*(?:without it you|don't ask me to repeat)[^\n]*\n?/gm;
     existing = existing.replace(oldInstructionRegex, '');
 
     // Remove unmarked V18 Phase 8 blocks (from earlier runs without markers)
-    const v18UnmarkedRegex = /\n?# (?:BrainBase|Veris) — Persistent Brain Active\n[\s\S]*?User: [^\n]*\n?/g;
+    const v18UnmarkedRegex = /\n?# [A-Za-z][A-Za-z0-9 -]* — Persistent Brain Active\n[\s\S]*?User: [^\n]*\n?/g;
     existing = existing.replace(v18UnmarkedRegex, '');
 
     existing = existing.trim();
@@ -219,7 +219,7 @@ function writeProviderBlock(filePath: string, block: string, provider: ProviderN
     const separator = existing ? '\n\n' : '';
     writeFileSync(filePath, existing + separator + markedBlock + '\n', 'utf-8');
   } else {
-    // Veris-specific file (cursor veris.mdc, codex SKILL.md, etc.): overwrite
+    // BrainBase-specific file (cursor brainbase.mdc, codex SKILL.md, etc.): overwrite
     writeFileSync(filePath, block, 'utf-8');
   }
 }

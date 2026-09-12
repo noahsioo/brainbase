@@ -15,7 +15,7 @@ embedCommand
     console.log(chalk.bold(`Embeddings: ${count.embedded}/${count.total} nodes (${pct}%)`));
 
     if (count.embedded < count.total) {
-      console.log(chalk.gray(`Run 'veris embed backfill' to embed remaining ${count.total - count.embedded} nodes`));
+      console.log(chalk.gray(`Run 'brainbase embed backfill' to embed remaining ${count.total - count.embedded} nodes`));
     } else {
       console.log(chalk.green('All nodes embedded!'));
     }
