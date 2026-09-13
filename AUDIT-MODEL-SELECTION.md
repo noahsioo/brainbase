@@ -232,25 +232,25 @@ Diese Provider haben keinen MODEL_CATALOG Eintrag und zeigen stattdessen:
 5. Selection -> set selectedModel
 
 **Unterschiede und warum sie OK sind:**
-- BrainBasehat statischen Katalog statt dynamischem -> kein Pi SDK noetig, Updates via Code
-- BrainBasehat kein "Keep current" -> irrelevant beim Erst-Setup (init)
-- BrainBasehat kein "auth missing" Hint -> Auth ist schon konfiguriert BEVOR Model-Auswahl
-- BrainBasehat keinen Provider-Filter -> max 5 Models pro Provider, nicht noetig
-- BrainBasezeigt `label` statt `provider/id` -> cleaner fuer User
+- BrainBase hat statischen Katalog statt dynamischem -> kein Pi SDK noetig, Updates via Code
+- BrainBase hat kein "Keep current" -> irrelevant beim Erst-Setup (init)
+- BrainBase hat kein "auth missing" Hint -> Auth ist schon konfiguriert BEVOR Model-Auswahl
+- BrainBase hat keinen Provider-Filter -> max 5 Models pro Provider, nicht noetig
+- BrainBase zeigt `label` statt `provider/id` -> cleaner fuer User
 
 ### Auth Flow
 
 **OpenClaw**: Provider-Gruppe -> Auth-Methoden (OAuth/Token/API Key) -> Credentials
 **BrainBase**: Provider -> Auto-Detect Env -> Paste/Env/Back -> Connection Test
 
-**Warum BrainBasesimpler**: Watcher braucht nur API-Key, kein OAuth/Setup-Token.
+**Warum BrainBase simpler**: Watcher braucht nur API-Key, kein OAuth/Setup-Token.
 
 ### Connection Testing
 
 **OpenClaw**: POST /chat/completions, max_tokens: 1, 30s timeout
 **BrainBase**: GET /models -> Fallback POST /chat/completions, max_tokens: 5, 10s timeout
 
-**Identisches Pattern**, BrainBasehat sogar 2-stufigen Test (models first).
+**Identisches Pattern**, BrainBase hat sogar 2-stufigen Test (models first).
 
 ### Custom Provider
 
